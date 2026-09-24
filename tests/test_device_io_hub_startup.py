@@ -42,6 +42,7 @@ def livekit_connector(hub, make_connector, monkeypatch):
     connector._room_client = SimpleNamespace(
         connect=AsyncMock(), disconnect=AsyncMock(), stop=Mock(),
         send_return_data=AsyncMock(), send_return_audio=AsyncMock(), flush_return_audio=AsyncMock(),
+        send_return_video=AsyncMock(), stop_return_video=AsyncMock(),
     )
     monkeypatch.setattr(connector_module, "require_nvidia_video_codecs", lambda: None)
     return connector

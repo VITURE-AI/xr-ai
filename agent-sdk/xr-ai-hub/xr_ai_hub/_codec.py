@@ -30,9 +30,12 @@ from ._types import (
     ImageCaptureData,
     ImageCaptureRequest,
     MsgType,
+    ParticipantAttributes,
     ParticipantEvent,
     PixelFormat,
     ReturnAudioFlush,
+    ReturnVideoFrame,
+    ReturnVideoStop,
     RosterRequest,
     SubscriptionProbe,
 )
@@ -146,13 +149,41 @@ register_encoder(
     MsgType.PARTICIPANT_EVENT,
     lambda m: [
         m.participant_id, m.joined, m.pts_us, m.connector_id,
-        m.participant_session_id,
+        m.participant_session_id, m.attributes,
     ],
 )
 register_decoder(
     MsgType.PARTICIPANT_EVENT,
-    lambda p: ParticipantEvent(p[0], p[1], p[2], p[3], p[4] if len(p) > 4 else ""),
+    lambda p: ParticipantEvent(
+        p[0], p[1], p[2], p[3],
+        p[4] if len(p) > 4 else "",
+        dict(p[5]) if len(p) > 5 and p[5] else {},
+    ),
 )
+
+register_encoder(
+    MsgType.PARTICIPANT_ATTRIBUTES,
+    lambda m: [m.participant_id, m.attributes, m.pts_us, m.participant_session_id],
+)
+register_decoder(
+    MsgType.PARTICIPANT_ATTRIBUTES,
+    lambda p: ParticipantAttributes(p[0], dict(p[1]), p[2], p[3]),
+)
+
+register_encoder(
+    MsgType.RETURN_VIDEO,
+    lambda m: [m.pts_us, m.width, m.height, int(m.fmt), m.data,
+               m.participant_id, m.track_id],
+)
+register_decoder(
+    MsgType.RETURN_VIDEO,
+    lambda p: ReturnVideoFrame(
+        p[0], p[1], p[2], PixelFormat(p[3]), bytes(p[4]), p[5], p[6],
+    ),
+)
+
+register_encoder(MsgType.RETURN_VIDEO_STOP, lambda m: [m.participant_id, m.track_id])
+register_decoder(MsgType.RETURN_VIDEO_STOP, lambda p: ReturnVideoStop(p[0], p[1]))
 
 register_encoder(MsgType.CONNECTOR_REGISTER, lambda m: [m.connector_id, m.shm_name])
 register_decoder(MsgType.CONNECTOR_REGISTER, lambda p: ConnectorRegistration(p[0], p[1]))

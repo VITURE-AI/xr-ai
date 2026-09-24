@@ -83,6 +83,15 @@ enable_token_server: true
 # under `[experimental]` in %UserProfile%\.wslconfig and run `wsl --shutdown`.
 # token_server_port: 8000
 
+# ── Return video ──────────────────────────────────────────────────────────────
+# Processed video an agent publishes for a participant (for example an
+# annotated camera view) appears as track xr-hub-overlay-<participant>.
+# "participant" lets only that participant subscribe; "room" lets every
+# participant in the room subscribe, for observer clients.
+# return_video_audience: participant
+# return_video_max_bitrate: 6000000
+# return_video_max_framerate: 30
+
 # ── Video recording (NVENC, optional) ─────────────────────────────────────────
 # Requires pynvvideocodec.  Frames are encoded via NVENC and written as
 # H.264 Annex B chunks.  Each chunk starts with an IDR frame and is

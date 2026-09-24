@@ -39,9 +39,12 @@ from xr_ai_hub import (
     FileMessage,
     FrameSignal,
     MsgType,
+    ParticipantAttributes,
     ParticipantEvent,
     PixelFormat,
     ReturnAudioFlush,
+    ReturnVideoFrame,
+    ReturnVideoStop,
     ShmRingBuffer,
     decode,
     encode,
@@ -53,6 +56,13 @@ from ._registration import _CONNECTOR_REGISTER_ACK_TOPIC
 ReturnAudioCallback      = Callable[[AudioChunk],        Awaitable[None]]
 ReturnDataCallback       = Callable[[DataMessage],       Awaitable[None]]
 ReturnAudioFlushCallback = Callable[[ReturnAudioFlush],  Awaitable[None]]
+ReturnVideoCallback      = Callable[[ReturnVideoFrame],  Awaitable[None]]
+ReturnVideoStopCallback  = Callable[[ReturnVideoStop],   Awaitable[None]]
+
+_RETURN_TOPICS = (
+    "return_audio", "return_audio_flush", "return_data",
+    "return_video", "return_video_stop",
+)
 
 _DEFAULT_NUM_SLOTS       = 16
 _DEFAULT_MAX_FRAME_BYTES = 12_441_600  # 4K NV12
@@ -165,6 +175,8 @@ class ConnectorEndpoint:
         self._return_audio_cbs:       list[ReturnAudioCallback]      = []
         self._return_data_cbs:        list[ReturnDataCallback]       = []
         self._return_audio_flush_cbs: list[ReturnAudioFlushCallback] = []
+        self._return_video_cbs:       list[ReturnVideoCallback]      = []
+        self._return_video_stop_cbs:  list[ReturnVideoStopCallback]  = []
         self._running = False
 
     # ── registration ─────────────────────────────────────────────────────────
@@ -379,6 +391,7 @@ class ConnectorEndpoint:
         participant_id: str,
         pts_us: int = 0,
         participant_session_id: str | None = None,
+        attributes: dict[str, str] | None = None,
     ) -> None:
         """
         Call when a LiveKit participant connects to the room.
@@ -392,15 +405,15 @@ class ConnectorEndpoint:
         # publishes return topics with the same trailing delimiter (see
         # `_hub.py`); the processor subscription path guards the inbound topics
         # identically (`_prefixes` in `xr_ai_hub._processor`).
-        self._sub.setsockopt(zmq.SUBSCRIBE, f"return_audio.{participant_id}.".encode())
-        self._sub.setsockopt(zmq.SUBSCRIBE, f"return_audio_flush.{participant_id}.".encode())
-        self._sub.setsockopt(zmq.SUBSCRIBE, f"return_data.{participant_id}.".encode())
+        for prefix in _RETURN_TOPICS:
+            self._sub.setsockopt(zmq.SUBSCRIBE, f"{prefix}.{participant_id}.".encode())
         session_id = participant_session_id or uuid.uuid4().hex
         self._participant_sessions[participant_id] = session_id
         event = ParticipantEvent(
             participant_id=participant_id, joined=True,
             pts_us=pts_us, connector_id=self._connector_id,
             participant_session_id=session_id,
+            attributes=dict(attributes or {}),
         )
         await self._push.send(encode(MsgType.PARTICIPANT_EVENT, event))
 
@@ -421,9 +434,8 @@ class ConnectorEndpoint:
         if participant_session_id and active_session and participant_session_id != active_session:
             return
         self._participant_sessions.pop(participant_id, None)
-        self._sub.setsockopt(zmq.UNSUBSCRIBE, f"return_audio.{participant_id}.".encode())
-        self._sub.setsockopt(zmq.UNSUBSCRIBE, f"return_audio_flush.{participant_id}.".encode())
-        self._sub.setsockopt(zmq.UNSUBSCRIBE, f"return_data.{participant_id}.".encode())
+        for prefix in _RETURN_TOPICS:
+            self._sub.setsockopt(zmq.UNSUBSCRIBE, f"{prefix}.{participant_id}.".encode())
         stale = [k for k in self._seq if k[0] == participant_id]
         for k in stale:
             del self._seq[k]
@@ -433,6 +445,26 @@ class ConnectorEndpoint:
             participant_session_id=session_id,
         )
         await self._push.send(encode(MsgType.PARTICIPANT_EVENT, event))
+
+    async def notify_participant_attributes(
+        self,
+        participant_id: str,
+        attributes: dict[str, str],
+        pts_us: int = 0,
+    ) -> None:
+        """Call when a connected participant's application attributes change."""
+        session_id = self._participant_sessions.get(participant_id)
+        if session_id is None:
+            return
+        await self._push.send(encode(
+            MsgType.PARTICIPANT_ATTRIBUTES,
+            ParticipantAttributes(
+                participant_id=participant_id,
+                attributes=dict(attributes),
+                pts_us=pts_us,
+                participant_session_id=session_id,
+            ),
+        ))
 
     # ── return-path callbacks ─────────────────────────────────────────────────
 
@@ -445,10 +477,16 @@ class ConnectorEndpoint:
     def on_return_audio_flush(self, cb: ReturnAudioFlushCallback) -> None:
         self._return_audio_flush_cbs.append(cb)
 
+    def on_return_video(self, cb: ReturnVideoCallback) -> None:
+        self._return_video_cbs.append(cb)
+
+    def on_return_video_stop(self, cb: ReturnVideoStopCallback) -> None:
+        self._return_video_stop_cbs.append(cb)
+
     # ── receive loop ─────────────────────────────────────────────────────────
 
     async def run(self) -> None:
-        """Receive return audio and data from the hub until stop() is called."""
+        """Receive return traffic from the hub until stop() is called."""
         self._running = True
         while self._running:
             try:
@@ -468,6 +506,12 @@ class ConnectorEndpoint:
                         await cb(msg)
                 elif type_id == MsgType.RETURN_AUDIO_FLUSH:
                     for cb in self._return_audio_flush_cbs:
+                        await cb(msg)
+                elif type_id == MsgType.RETURN_VIDEO:
+                    for cb in self._return_video_cbs:
+                        await cb(msg)
+                elif type_id == MsgType.RETURN_VIDEO_STOP:
+                    for cb in self._return_video_stop_cbs:
                         await cb(msg)
                 else:
                     logger.debug("Connector: unhandled return type {}", type_id)

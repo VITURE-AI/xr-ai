@@ -5,10 +5,12 @@
 Token server — browser-facing HTTPS entry point.
 
 Serves:
-  GET  /token            — signed LiveKit JWT for browser clients
-  GET  /rtc[/*]/validate — proxied to LiveKit HTTP (token pre-check)
-  WS   /rtc[/*]          — proxied to LiveKit WebSocket (signaling)
-  GET  /                 — optional browser static files
+  GET     /token            — signed LiveKit JWT for browser clients
+  GET     /clients          — room roster with each client's role and input
+  DELETE  /clients/{id}     — disconnect that participant
+  GET     /rtc[/*]/validate — proxied to LiveKit HTTP (token pre-check)
+  WS      /rtc[/*]          — proxied to LiveKit WebSocket (signaling)
+  GET     /                 — optional browser static files
 """
 from __future__ import annotations
 
@@ -22,6 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
 from . import _lk_proxy
+from ._clients import ClientAdmin, mount_client_admin, validated_role
 from ._token import make_client_token
 from .config import LiveKitConnectorConfig
 
@@ -81,11 +84,13 @@ async def wait_until_bound(server: uvicorn.Server, task: asyncio.Task) -> None:
             pass
 
 
-def _proxy_client_lifespan(client: httpx.AsyncClient):
+def _proxy_client_lifespan(client: httpx.AsyncClient, admin: ClientAdmin | None = None):
     @asynccontextmanager
     async def _lifespan(_app: FastAPI):
         yield
         await client.aclose()
+        if admin is not None:
+            await admin.aclose()
     return _lifespan
 
 
@@ -94,22 +99,28 @@ def build_app(cfg: LiveKitConnectorConfig) -> FastAPI:
     lk_internal_ws   = f"ws://127.0.0.1:{cfg.lk_port_ws}"
 
     proxy_client = httpx.AsyncClient(timeout=5.0)
+    admin = ClientAdmin(cfg, lk_internal_http)
 
     app = FastAPI(
         title="DeviceIOHub Token Server",
-        lifespan=_proxy_client_lifespan(proxy_client),
+        lifespan=_proxy_client_lifespan(proxy_client, admin),
     )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
-        allow_methods=["GET"],
+        allow_methods=["GET", "DELETE"],
         allow_headers=["*"],
     )
 
     @app.get("/token")
-    async def get_token(identity: str = Query(default="browser-user")) -> dict:
-        token = make_client_token(cfg, identity=identity, ttl=None)
+    async def get_token(
+        identity: str = Query(default="browser-user"),
+        role: str = Query(default="", description="Role published as the xr.role attribute"),
+    ) -> dict:
+        token = make_client_token(cfg, identity=identity, ttl=None, role=validated_role(role))
         return {"token": token, "room": cfg.room_name, "url": cfg.token_server_url}
+
+    mount_client_admin(app, admin)
 
     _lk_proxy.mount_rtc_proxy(
         app,

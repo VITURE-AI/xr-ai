@@ -6,7 +6,7 @@ Processor-side IPC endpoint (subscriber + publisher).
 
 Connects to the hub's PUB socket to receive real-time video signals, audio,
 data, and participant events. Also connects a PUSH socket to send RETURN_DATA,
-RETURN_AUDIO, and FRAME_REQUEST back to the hub.
+RETURN_AUDIO, RETURN_VIDEO, and FRAME_REQUEST back to the hub.
 
 Works for any downstream processing workload — analytics, ML inference,
 transcription, echo, recording — not just agentic pipelines.
@@ -68,7 +68,8 @@ from ._file_ordering import FileRoute, FileSessionOrderer
 from ._types import (AgentPresence, AudioChunk, DataMessage, FileMessage, FrameData,
                      FrameRequest, FrameSignal, ImageCaptureCancel,
                      ImageCaptureData, ImageCaptureRequest, MsgType,
-                     ParticipantEvent, ReturnAudioFlush, RosterRequest,
+                     ParticipantAttributes, ParticipantEvent, ReturnAudioFlush,
+                     ReturnVideoFrame, ReturnVideoStop, RosterRequest,
                      SubscriptionProbe)
 
 log = logging.getLogger(__name__)
@@ -80,6 +81,7 @@ DataCallback        = Callable[[DataMessage],      Awaitable[None]]
 ImageCaptureCallback = Callable[[ImageCaptureData], Awaitable[None]]
 FileCallback        = Callable[[FileMessage],      Awaitable[None]]
 ParticipantCallback = Callable[[ParticipantEvent], Awaitable[None]]
+ParticipantAttributesCallback = Callable[[ParticipantAttributes], Awaitable[None]]
 CallbackUnsubscribe = Callable[[], None]
 
 # Reserved topic for internal SDK status messages — not forwarded to app callbacks.
@@ -273,6 +275,7 @@ class ProcessorEndpoint:
 
         self._participants: set[str] = set()
         self._participant_sessions: dict[str, str] = {}
+        self._participant_attributes: dict[str, dict[str, str]] = {}
 
         self._frame_cbs:       list[FrameSignalCallback] = []
         self._frame_data_cbs:  list[FrameDataCallback]   = []
@@ -281,6 +284,7 @@ class ProcessorEndpoint:
         self._image_capture_cbs: list[ImageCaptureCallback] = []
         self._file_cbs:        list[FileCallback]        = []
         self._participant_cbs: list[ParticipantCallback] = []
+        self._participant_attribute_cbs: list[ParticipantAttributesCallback] = []
 
         # Pending request_frame() calls keyed by (participant_id, track_id).
         # Each entry is a list of futures — all resolved when FRAME_DATA arrives.
@@ -321,6 +325,13 @@ class ProcessorEndpoint:
     def connected_participants(self) -> frozenset[str]:
         """Participant IDs currently connected to the hub, auto-updated."""
         return frozenset(self._participants)
+
+    def participant_attributes(self, participant_id: str) -> dict[str, str]:
+        """Return a copy of a connected participant's latest attributes.
+
+        Returns an empty mapping for unknown participants.
+        """
+        return dict(self._participant_attributes.get(participant_id, {}))
 
     @property
     def subscribed_participants(self) -> frozenset[str]:
@@ -522,6 +533,23 @@ class ProcessorEndpoint:
         """Register an async callback for participant join and leave events."""
         self._participant_cbs.append(cb)
 
+    def on_participant_attributes(
+        self, cb: ParticipantAttributesCallback,
+    ) -> CallbackUnsubscribe:
+        """Register an async callback for participant attribute changes.
+
+        Attributes present at join time arrive on :class:`ParticipantEvent`;
+        this callback fires only for later changes. Returns a function that
+        removes the callback.
+        """
+        self._participant_attribute_cbs.append(cb)
+
+        def unsubscribe() -> None:
+            if cb in self._participant_attribute_cbs:
+                self._participant_attribute_cbs.remove(cb)
+
+        return unsubscribe
+
     # ── return path ───────────────────────────────────────────────────────────
 
     async def send_return_data(self, msg: DataMessage) -> None:
@@ -541,6 +569,25 @@ class ProcessorEndpoint:
     async def send_return_audio(self, chunk: AudioChunk) -> None:
         """Queue a PCM audio chunk for playback by its target participant."""
         await self._push.send(encode(MsgType.RETURN_AUDIO, chunk))
+
+    async def send_return_video(self, frame: ReturnVideoFrame) -> None:
+        """Publish one processed video frame as its participant's return track.
+
+        The hub creates the track on the first frame for a
+        ``(participant_id, track_id)`` pair and republishes it when the frame
+        size or pixel format changes. Frames for disconnected participants are
+        dropped.
+        """
+        await self._push.send(encode(MsgType.RETURN_VIDEO, frame))
+
+    async def stop_return_video(
+        self, participant_id: str, track_id: str = "overlay",
+    ) -> None:
+        """Unpublish one participant's processed-video track, if published."""
+        await self._push.send(encode(
+            MsgType.RETURN_VIDEO_STOP,
+            ReturnVideoStop(participant_id=participant_id, track_id=track_id),
+        ))
 
     async def flush_return_audio(self, participant_id: str) -> None:
         """
@@ -1054,6 +1101,7 @@ class ProcessorEndpoint:
                     == msg.participant_session_id
                 ):
                     return
+                self._participant_attributes[msg.participant_id] = dict(msg.attributes)
                 self._participants.add(msg.participant_id)
                 self._participant_sessions[msg.participant_id] = (
                     msg.participant_session_id
@@ -1080,6 +1128,7 @@ class ProcessorEndpoint:
                 departed_session = msg.participant_session_id or active_session
                 self._participants.discard(msg.participant_id)
                 self._participant_sessions.pop(msg.participant_id, None)
+                self._participant_attributes.pop(msg.participant_id, None)
                 if self._auto_subscribe:
                     self.unsubscribe(msg.participant_id)
                 self._participant_status.pop(msg.participant_id, None)
@@ -1094,6 +1143,21 @@ class ProcessorEndpoint:
                         ),
                     )
             for cb in self._participant_cbs:
+                self._spawn(cb(msg))
+        elif type_id == MsgType.PARTICIPANT_ATTRIBUTES:
+            if msg.participant_id not in self._participants:
+                return
+            active_session = self._participant_sessions.get(msg.participant_id, "")
+            if (
+                msg.participant_session_id
+                and active_session
+                and msg.participant_session_id != active_session
+            ):
+                return
+            if self._participant_attributes.get(msg.participant_id) == msg.attributes:
+                return
+            self._participant_attributes[msg.participant_id] = dict(msg.attributes)
+            for cb in self._participant_attribute_cbs:
                 self._spawn(cb(msg))
         elif type_id == MsgType.SUBSCRIPTION_PROBE:
             fut = self._probe_waiters.get(msg.token)
