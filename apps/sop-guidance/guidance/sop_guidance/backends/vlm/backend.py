@@ -62,6 +62,8 @@ class VlmBackend:
                 reference_images=step.reference_image_paths,
                 before_image=step.before_image_path,
                 gradeable=step.reference_reliable,
+                requirements=step.expected_requirements,
+                done_when=step.key_info.target_state if step.key_info else "",
             )
             for index, step in enumerate(self.sop.steps)
         ]

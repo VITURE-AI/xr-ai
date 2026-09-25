@@ -296,6 +296,7 @@ class ClientProtocol:
         token = command.get("token")
         token = token if isinstance(token, str) else None
         if action == "ready":
+            await self._host.republish()
             return HostReply("ok", "")
         if action == "cancel":
             self._host.cancel_takeover(pid, token)

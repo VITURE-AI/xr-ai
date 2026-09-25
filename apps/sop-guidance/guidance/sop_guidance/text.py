@@ -238,7 +238,8 @@ _GUIDANCE_REQUEST = re.compile(
     r"^(?:(?:please|can you|could you|would you|can we|could we|i want to)\s+)*"
     r"(?P<command>(?:guide|walk|take|get) me through|show me how to|"
     r"resume|continue|carry on|pick up where we left off|"
-    r"start over|start again|restart|go to|jump to|go back to|start from|start at)\b"
+    r"start over|start again|restart|go to|jump to|go back to|start from|start at|"
+    r"skip (?:ahead |forward )?to|take me to|move (?:on )?to)\b"
     r"(?P<target>.*)$"
 )
 _STEP_NUMBER = re.compile(r"\bstep\s+(-?\d+|one|two|three|four|five|six|seven|eight|nine|ten)\b")
@@ -263,9 +264,10 @@ def guidance_request(text: str) -> tuple[str, int, str] | None:
         r"\b(?:from the beginning|from scratch|start over|start again|restart)\b", normalized,
     ))
     number = _STEP_NUMBER.search(target)
-    if command in {"go to", "jump to", "go back to", "start from", "start at"} and not (
-        number or beginning
-    ):
+    # Jumps name a step: "go to the sink" or "move on to the next part" are not.
+    jumps = {"go to", "jump to", "go back to", "start from", "start at", "skip to",
+             "skip ahead to", "skip forward to", "take me to", "move to", "move on to"}
+    if command in jumps and not (number or beginning):
         return None
     if beginning and not re.search(r"\bnot from the beginning\b", normalized):
         mode, step = "start", 0

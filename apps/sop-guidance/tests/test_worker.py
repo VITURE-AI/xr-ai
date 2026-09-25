@@ -379,6 +379,12 @@ async def test_control_messages(harness: HostHarness) -> None:
         "input_participant": "glasses",
     }))
     session = harness.host.session_of("alice")
+    # A client announcing itself gets the running session's state again.
+    states_before = len(harness.ports.states)
+    await protocol.on_data(msg("guidance.control", {"action": "ready", "request_id": "r4"},
+                               pid="bob"))
+    assert len(harness.ports.states) == states_before + 1
+    assert harness.ports.states[-1]["session_id"] == session.session_id
     await protocol.on_data(msg("guidance.control", {
         "action": "stop", "session_id": session.session_id, "request_id": "r3",
     }, pid="bob"))
@@ -426,6 +432,7 @@ def test_api_serves_procedures_and_requires_the_token(
     assert [p["id"] for p in listing["procedures"]] == ["lid-demo"]
     detail = client.get("/api/procedures/lid-demo", headers=auth).json()
     assert [s["instruction"] for s in detail["step_list"]][0] == "Open the lid."
+    assert {"requirements", "done_when"} <= set(detail["step_list"][0])
     assert client.get("/api/procedures/lid-demo/files/thumb.jpg", headers=auth).content \
         == b"\xff\xd8jpeg"
     assert client.get("/api/procedures/lid-demo/files/procedure.yaml",

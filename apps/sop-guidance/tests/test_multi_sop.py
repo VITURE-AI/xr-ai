@@ -95,6 +95,9 @@ def test_new_procedure_builds_a_vlm_backend_without_vision(tmp_path: Path) -> No
     assert fixture.validate() == []
     assert [s.gradeable for s in fixture.steps()] == [False, True, False]
     assert fixture.steps()[1].reference_images == (str(FIXTURE / "frames" / "step_02.jpg"),)
+    # What a tutorial or operator page shows as "done when".
+    assert fixture.steps()[1].requirements == ("New cartridge seated in the funnel",)
+    assert fixture.steps()[1].done_when == "cartridge seated flush in the funnel"
     # The contrast: the nose pad needs its detector, this one needs nothing.
     assert any("vision support is unavailable" in p for p in shipped.validate())
 

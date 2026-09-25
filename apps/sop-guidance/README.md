@@ -162,3 +162,12 @@ backend_config:
 
 Frames reach the sidecar over a shared-memory ring and events come back over
 ZMQ. `tests/fixtures/sidecar_stub.py` is a minimal sidecar.
+
+## Evals
+
+`eval/` holds two live-model checks. `eval/eval.py` is a foreground routing
+eval driven by `eval/cases.yaml`, in the same style as the tea sample.
+`eval/replay.py` re-grades checks recorded by the old glasses worker through
+the `vlm` backend and reports agreement and latency against the recorded
+verdicts. Pass the recorded session folders on the command line; they are
+never read from or written to the repo. Refer to [`eval/README.md`](eval/README.md).

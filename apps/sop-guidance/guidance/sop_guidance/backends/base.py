@@ -77,6 +77,12 @@ class StepInfo:
     gradeable: bool = True
     """Whether the backend can confirm this step on its own."""
 
+    requirements: tuple[str, ...] = ()
+    """Short conditions that must all be visible for the step to count as done."""
+
+    done_when: str = ""
+    """The finished state in one description, for tutorials and operators."""
+
 
 @dataclass(slots=True)
 class TimedFrame:

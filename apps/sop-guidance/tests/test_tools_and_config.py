@@ -120,3 +120,15 @@ def test_shipped_procedure_builds_its_backend() -> None:
     entry = discover_procedures(config.procedures_dir, config.guidance_defaults)[0]
     VlmBackendConfig.model_validate(entry.spec.backend_config)
     assert callable(resolve_backend("vlm"))
+
+
+def test_spoken_step_jumps_are_entry_requests() -> None:
+    from sop_guidance.text import guidance_request
+
+    assert guidance_request("Skip ahead to step four.") == ("step", 4, "")
+    assert guidance_request("take me to step 2") == ("step", 2, "")
+    assert guidance_request("move on to step three") == ("step", 3, "")
+    # Only with a step number: these are questions or reports, not jumps.
+    assert guidance_request("move on to the next part") is None
+    assert guidance_request("go to the sink") is None
+    assert guidance_request("resume guidance") == ("resume", 0, "")

@@ -1048,6 +1048,13 @@ class GuidanceHost:
             "updated_us": _now_us(),
         }
 
+    async def republish(self) -> None:
+        """Send every running session's state again, for a client that just connected."""
+
+        for session in self.sessions():
+            if not session.ended:
+                await self._publish(session)
+
     async def _publish(self, session: GuidanceSession, *, ended: bool = False,
                        outcome: str = "") -> None:
         try:

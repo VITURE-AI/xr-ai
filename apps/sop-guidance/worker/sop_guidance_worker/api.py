@@ -95,6 +95,8 @@ def create_api(*, host: GuidanceHost, store: SessionStore, config: ApiConfig) ->
                     url for url in (_frame_url(found, p) for p in step.reference_images) if url
                 ],
                 "before_image": _frame_url(found, step.before_image),
+                "requirements": list(step.requirements),
+                "done_when": step.done_when,
             }
             for step in found.backend.steps()
         ]

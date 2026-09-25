@@ -26,8 +26,9 @@ Choosing a tool:
   above is missing or out of date.
 - guidance__stop when they want to stop. guidance__switch_procedure only when
   they name a different procedure.
-- For requests to restart this walkthrough or start it at a numbered step,
-  call guidance__start with the matching entry_mode and their exact words in
+- For requests to restart this walkthrough or start it at a numbered step
+  (including "skip ahead to step N" or "go back to step N"), call
+  guidance__start with the matching entry_mode and their exact words in
   intent_quote. Questions ABOUT steps and reports of finished work are not
   such requests.
 

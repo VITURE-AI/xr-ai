@@ -101,8 +101,13 @@ class Interaction:
         return session.owner if session is not None else pid
 
     async def _status(self, pid: str, status: str) -> None:
-        with suppress(Exception):
-            await self._ep.set_status(status, pid)
+        # The wearer speaking for an operator's session sees the same status
+        # as the operator. Guidance itself is not a status: the hub folds any
+        # value it does not know into "processing", so clients read it from
+        # guidance.state instead.
+        for target in dict.fromkeys((pid, self._as_owner(pid))):
+            with suppress(Exception):
+                await self._ep.set_status(status, target)
 
     # ── entry points ─────────────────────────────────────────────────────────
 
