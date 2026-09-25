@@ -27,7 +27,7 @@ only-include = ["main.py"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 pythonpath = ["worker", "guidance", "services/dashscope-speech", "tests"]
-testpaths = ["tests"]
+testpaths = ["tests", "eval"]
 markers = [
   "gpu: requires local GPU, Docker, or NVENC",
   "integration: starts a real service process",
