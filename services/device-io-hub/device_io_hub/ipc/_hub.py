@@ -198,6 +198,13 @@ class HubEndpoint:
         self._agent_status: dict[str, dict[str, str]] = {}
         # agent_id → participants it answers for; None means all of them.
         self._agent_scope: dict[str, set[str] | None] = {}
+        # Agents known only from their status reports, not a presence message:
+        # agents attached before this hub (re)started announce once, at their
+        # own start, and would otherwise leave their clients at "loading".
+        self._implicit_agents: set[str] = set()
+        # Agents that detached; a status report racing the detach must not
+        # bring them back.
+        self._detached_agents: set[str] = set()
         # participant_id → last aggregate published, to suppress duplicates.
         self._published_status: dict[str, str] = {}
 
@@ -336,8 +343,18 @@ class HubEndpoint:
             status   = payload["status"]
         except (ValueError, TypeError, KeyError, UnicodeDecodeError):
             return None
+        agent_id = str(agent_id)
         self._agent_status.setdefault(agent_id, {})[msg.participant_id] = str(status)
-        return str(agent_id)
+        if agent_id not in self._agent_scope and agent_id not in self._detached_agents:
+            self._implicit_agents.add(agent_id)
+            self._agent_scope[agent_id] = set()
+        if agent_id in self._implicit_agents:
+            # Only the participants it has spoken for: an agent scoped to one
+            # client must not hold every other client at "loading".
+            scope = self._agent_scope[agent_id]
+            if scope is not None:
+                scope.add(msg.participant_id)
+        return agent_id
 
     def _responsible_agents(self, participant_id: str) -> list[str]:
         """Agent ids that answer for *participant_id*."""
@@ -887,9 +904,13 @@ class HubEndpoint:
                 self._agent_scope[msg.agent_id] = (
                     None if msg.scope is None else set(msg.scope)
                 )
+                self._implicit_agents.discard(msg.agent_id)
+                self._detached_agents.discard(msg.agent_id)
             else:
                 self._agent_status.pop(msg.agent_id, None)
                 self._agent_scope.pop(msg.agent_id, None)
+                self._implicit_agents.discard(msg.agent_id)
+                self._detached_agents.add(msg.agent_id)
             await self._republish_agent_status()
 
         else:

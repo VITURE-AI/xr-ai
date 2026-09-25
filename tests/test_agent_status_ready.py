@@ -22,9 +22,10 @@ Three properties matter, all protocol-level rather than cosmetic:
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
-from xr_ai_hub import DataMessage, Subscribe
+from xr_ai_hub import AGENT_STATUS_TOPIC, DataMessage, Subscribe
 
 from _helpers import setup_client, teardown_clients, wait_for
 
@@ -307,3 +308,66 @@ async def test_agent_scoped_elsewhere_does_not_hold_this_client_back(
         assert bob.statuses[-1] == "ready"
     finally:
         await teardown_clients([bob])
+
+
+# ── a hub that restarted under running agents ────────────────────────────────
+
+
+async def test_agent_attached_before_a_hub_restart_still_reaches_ready(
+    hub, make_connector, make_processor, settle,
+):
+    """Agents announce presence once, at their own start.
+
+    A hub that restarts under a running agent never hears it again, and the
+    agent's clients stayed at ``loading`` for good. Its status reports now
+    register it for the participants it speaks for.
+    """
+    agent = make_processor(announces_readiness=True, agent_id="worker")
+    await agent.wait_until_running()
+    await agent.mark_ready()
+    alice = await setup_client(make_connector, "alice")
+    try:
+        await wait_for(lambda: alice.statuses[-1:] == ["ready"])
+        assert alice.statuses[-1] == "ready"
+
+        # What a restarted hub knows about the agent: nothing.
+        hub._agent_status.clear()
+        hub._agent_scope.clear()
+
+        await agent.set_status("processing", "alice")
+        await wait_for(lambda: alice.statuses[-1:] == ["processing"])
+        assert alice.statuses[-1] == "processing"
+        await agent.set_status("ready", "alice")
+        await wait_for(lambda: alice.statuses[-1:] == ["ready"])
+        assert alice.statuses[-1] == "ready"
+    finally:
+        await teardown_clients([alice])
+
+
+def _status(pid: str, agent_id: str, status: str) -> DataMessage:
+    return DataMessage(participant_id=pid, topic=AGENT_STATUS_TOPIC, pts_us=0,
+                       data=json.dumps({"agent_id": agent_id, "status": status}).encode())
+
+
+async def test_implicit_agent_answers_only_for_whom_it_reported(hub):
+    hub._record_agent_status(_status("alice", "solo", "ready"))
+
+    assert hub._aggregate_status("alice") == "ready"
+    # Never heard from for bob: it cannot hold bob at "loading".
+    assert "solo" not in hub._responsible_agents("bob")
+
+    # A real presence message replaces the guess.
+    hub._agent_scope["solo"] = None
+    hub._implicit_agents.discard("solo")
+    assert "solo" in hub._responsible_agents("bob")
+
+
+async def test_status_racing_a_detach_does_not_revive_the_agent(hub):
+    hub._record_agent_status(_status("alice", "gone", "ready"))
+    hub._agent_scope.pop("gone")
+    hub._agent_status.pop("gone")
+    hub._implicit_agents.discard("gone")
+    hub._detached_agents.add("gone")
+
+    hub._record_agent_status(_status("alice", "gone", "processing"))
+    assert "gone" not in hub._responsible_agents("alice")
