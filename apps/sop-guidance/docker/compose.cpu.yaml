@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Overlay for hosts without an NVIDIA GPU (or where containers should not use
+# it):
+#
+#   docker compose -f compose.yaml -f compose.cpu.yaml up -d --build
+#
+# `!reset` removes the base `gpus: all` outright; an empty list would be merged
+# away and the request would survive. Requires Compose v2.24+.
+#
+# The detectors already run on the CPU (OpenVINO int8, `device: intel:cpu` in
+# yaml/detectors.yaml), so the worker needs nothing else. The hub normally
+# requires NVDEC/NVENC for video; without them it decodes in software, which
+# is fine for development and must not be distributed (OpenH264).
+services:
+  hub:
+    gpus: !reset null
+    environment:
+      XR_AI_SKIP_HWCODEC_CHECK: "1"
+  worker:
+    gpus: !reset null

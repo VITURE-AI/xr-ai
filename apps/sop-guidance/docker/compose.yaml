@@ -1,0 +1,96 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# The SOP guidance stack: LiveKit, DeviceIOHub, the DashScope speech shim and
+# the guidance worker. From apps/sop-guidance/docker/:
+#
+#   cp .env.example .env            # then set DASHSCOPE_API_KEY
+#   docker compose -f compose.yaml -f compose.cpu.yaml up -d --build   # no NVIDIA GPU
+#   docker compose up -d --build                                       # NVIDIA GPU host
+#
+# Every service uses the host network: WebRTC needs its UDP port reachable on
+# the host's own addresses, and the worker's app API stays on 127.0.0.1.
+# The hub and worker talk over ZeroMQ sockets under /tmp and a shared-memory
+# frame ring, so they share one /tmp volume and the host IPC namespace.
+
+name: sop-guidance
+
+x-build-args: &build-args
+  APT_MIRROR_HOST: ${APT_MIRROR_HOST:-deb.debian.org}
+  PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+  TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
+
+services:
+  livekit:
+    image: livekit/livekit-server:v1.13.5
+    restart: unless-stopped
+    network_mode: host
+    command: ["--config", "/etc/livekit.yaml", "--bind", "0.0.0.0"]
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+
+  hub:
+    build:
+      context: ../../..
+      dockerfile: apps/sop-guidance/docker/hub.Dockerfile
+      args: *build-args
+    image: sop-guidance-hub
+    restart: unless-stopped
+    network_mode: host
+    ipc: host
+    gpus: all
+    depends_on:
+      - livekit
+    environment:
+      XR_WEB_PASSCODE: ${XR_WEB_PASSCODE:-}
+    volumes:
+      - xr-hub-ipc:/tmp
+      - xr-hub-certs:/home/appuser/.local/share/xr-ai
+      - ../yaml/docker/device_io_hub.yaml:/etc/xr-ai/device_io_hub.yaml:ro
+
+  speech:
+    build:
+      context: ../../..
+      dockerfile: apps/sop-guidance/docker/speech.Dockerfile
+      args: *build-args
+    image: sop-guidance-speech
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:?set DASHSCOPE_API_KEY in .env}
+      DASHSCOPE_API_URL: ${DASHSCOPE_API_URL:-}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8106/health', timeout=2).status == 200 else 1)"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+
+  worker:
+    build:
+      context: ../../..
+      dockerfile: apps/sop-guidance/docker/worker.Dockerfile
+      args: *build-args
+    image: sop-guidance-worker
+    restart: unless-stopped
+    network_mode: host
+    ipc: host
+    gpus: all
+    depends_on:
+      hub:
+        condition: service_started
+      speech:
+        condition: service_healthy
+    environment:
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:?set DASHSCOPE_API_KEY in .env}
+      SOP_GUIDANCE_API_TOKEN: ${SOP_GUIDANCE_API_TOKEN:-}
+    volumes:
+      - xr-hub-ipc:/tmp
+      - sop-guidance-run:/data/run
+      # Edit procedures and settings without rebuilding: restart the worker.
+      - ../procedures:/workspace/apps/sop-guidance/procedures:ro
+      - ../yaml:/workspace/apps/sop-guidance/yaml:ro
+
+volumes:
+  xr-hub-ipc:
+  xr-hub-certs:
+  sop-guidance-run:

@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "xr-ai-sop-guidance"
+version = "0.1.0"
+description = "Procedure catalog, guidance host, and pluggable procedure backends for SOP guidance."
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "nemo-relay>=0.7.2,<0.8",
+    "xr-ai-agent-runtime",
+    "xr-ai-hub-client",
+    "xr-ai-models",
+    "xr-ai-tools",
+    "loguru>=0.7",
+    "numpy>=1.24",
+    "pydantic>=2.12",
+    "pyyaml>=6.0",
+    "pyzmq>=27.0",
+    "msgpack>=1.0",
+]
+
+[project.optional-dependencies]
+vision = [
+    "opencv-python-headless>=4.10",
+    "openvino>=2025.3",
+    "ultralytics>=8.4.117",
+    "Pillow>=10.0",
+]
+recorder = [
+    "imageio-ffmpeg>=0.5",
+]
+
+[project.entry-points."sop_guidance.backends"]
+vlm = "sop_guidance.backends.vlm:create_backend"
+
+[tool.uv.sources]
+xr-ai-agent-runtime = { path = "../../../agent-sdk/xr-ai-runtime", editable = true }
+xr-ai-hub-client = { path = "../../../agent-sdk/xr-ai-hub", editable = true }
+xr-ai-models = { path = "../../../agent-sdk/xr-ai-models", editable = true }
+xr-ai-tools = { path = "../../../agent-sdk/xr-ai-tools", editable = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["sop_guidance"]

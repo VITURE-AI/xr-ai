@@ -1,0 +1,113 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Named YOLO detector profiles, loaded by sop_guidance.vision.load_detector_profiles.
+# Model paths are resolved relative to THIS file's directory, so they point into
+# ../detectors/ (not models/: the repo .gitignore ignores `**/models/**`).
+# An OpenVINO IR is a directory that MUST be named `*_openvino_model`:
+# ultralytics picks the backend from the directory name, not its contents.
+
+profiles:
+  # ── nose-pad replacement: task detector + dedicated hand detector ────────
+  nosepad-v5:
+    enabled: true
+    # A failed annotation fails the guidance step instead of sending the VLM a
+    # raw frame.
+    required: true
+    # FrameAnnotator.warmup() runs one throwaway inference so the first guided
+    # frame does not pay for device allocation and kernel autotune.
+    preheat: true
+    # v5 checkpoint, int8 OpenVINO IR. Classes: glasses_lens_area, hand,
+    # nosepad_0, nosepad_1. Per frame on a Core Ultra 9 285H: int8 on intel:cpu
+    # 20.1 ms (mAP50-95 0.7751); fp16 on intel:gpu 13.3 ms (0.7823).
+    model: ../detectors/nosepad-v5-int8_openvino_model
+    # Export size of the IR. At 768 the long side is scaled to 768 whatever the
+    # source, so a larger camera frame or a glasses crop recovers no pad recall
+    # (measured: all variants within noise).
+    imgsz: 768
+    # OpenVINO target (`intel:cpu`, `intel:gpu`, `intel:npu`), a CUDA ordinal, or
+    # `cpu`. An unavailable intel:* target silently falls back to CPU; check
+    # `execution=` on the GUIDANCE_YOLO_PREHEAT log line.
+    device: intel:cpu
+    # Swept on v5 (v3 test split): seated recall is flat from 0.35 to 0.60, and
+    # 0.30 buys ~19 more true pads (any-pad recall 0.828 -> 0.858) for one extra
+    # false-positive seated box. A missed pad manufactures a wrong spoken
+    # correction; an invented one only loses a veto, and temporal voting removes
+    # sporadic ones.
+    conf: 0.30
+    # Inert on this IR (YOLO26's NMS-free end2end head); kept for a .pt swap.
+    iou: 0.70
+    overlay:
+      boxes: true               # draw box outlines
+      line_width_px: 1          # thin, so boxes do not hide the object from the VLM
+      line_type: anti_aliased   # anti_aliased | anything else = cv2.LINE_8
+      labels: true              # draw a filled label tab above each box
+      confidence_text: false    # hidden: the prompt tells the VLM confidences are withheld
+      font: cv2.FONT_HERSHEY_SIMPLEX   # the only supported font
+      font_scale: 0.42
+      font_thickness: 1
+      label_padding_px: 3
+      # Keys MUST be exactly the checkpoint's classes: the annotator compares
+      # them at load and refuses a mismatch, which makes a model swap safe.
+      # Values are the drawn label AND the Detection.label the geometry plugin
+      # matches on. The size variants stay apart (the VLM reads the distinction;
+      # the plugin's PAD_LABELS treats all of them as "a pad"), verbatim rather
+      # than "small"/"large" because nothing says which index is which size.
+      class_labels:
+        glasses_lens_area: glasses
+        hand: hand
+        nosepad_0: nosepad_0
+        nosepad_1: nosepad_1
+      # "#RRGGBB" per checkpoint class. Distinct colours, and each one must have
+      # a name in the prompt legend (blue / light pink / green / yellow).
+      class_colors_rgb:
+        glasses_lens_area: "#2F80ED"
+        hand: "#F4A6B5"
+        nosepad_0: "#27AE60"
+        nosepad_1: "#F2C94C"
+    # Dedicated hand detector. Runs after the task detector on the same frame
+    # and REPLACES that model's own `hand` class (found a hand in 28 of 40 live
+    # frames against 24 for the task class). Same label and colour, so the
+    # geometry plugin and the legend cannot tell the source changed.
+    hands:
+      enabled: true
+      model: ../detectors/hand/hand_yolov8n.pt
+      conf: 0.40
+      iou: 0.70
+      imgsz: 640                # this model trains and runs at 640
+      # torch checkpoint, so `cpu` or a CUDA ordinal -- never an intel:* target.
+      device: cpu
+      source_class: hand        # the only class this checkpoint has
+      label: hand
+      color_rgb: "#F4A6B5"
+      replaces_class: hand      # suppressed from the task pass; "" keeps both
+
+  # ── live preview: general-purpose COCO detector ──────────────────────────
+  # Decoration for an idle stream, not evidence: its boxes never reach a VLM
+  # prompt or a geometry plugin.
+  live-coco:
+    enabled: true
+    # A missing checkpoint disables the overlay rather than failing anything.
+    required: false
+    preheat: true
+    # int8 OpenVINO IR of yolo26s.pt, calibrated on coco128 plus 300 frames of
+    # the target room. Costs 0.021 mAP50-95 against fp32 on coco128.
+    model: ../detectors/yolo26s-int8_openvino_model
+    imgsz: 640                  # what this checkpoint was trained and exported at
+    device: intel:cpu
+    # Higher than the task detector: a wrong box here is just clutter, and COCO
+    # classes on a desk scene are a long tail of low-confidence guesses.
+    conf: 0.40
+    iou: 0.70
+    overlay:
+      boxes: true
+      labels: true
+      # On: with 80 classes the label alone does not say whether a box is a
+      # real reading or a guess.
+      confidence_text: true
+      line_width_px: 2
+      # No class_labels: draw all 80 COCO classes under their own names, each
+      # in a stable colour derived from the class name.
+    hands:
+      # COCO has no hand class to replace and no plugin reads these boxes.
+      enabled: false

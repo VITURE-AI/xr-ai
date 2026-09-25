@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# LiveKit for the compose stack: the same settings the hub renders when it
+# starts LiveKit itself. Keys and ports must match yaml/docker/device_io_hub.yaml.
+# Development-only keys; replace both files' values for any shared deployment.
+port: 7880
+rtc:
+  tcp_port: 7881
+  udp_port: 7882
+  use_external_ip: false
+keys:
+  devkey: devsecret-xr-livekit-prototype-2026
+logging:
+  json: false
+  level: info
+room:
+  auto_create: true

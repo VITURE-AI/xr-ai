@@ -11,7 +11,6 @@ Start with the
 
 Repository dependency, lint, SPDX, sample catalog, and test discovery exclude
 application-owned files in this directory. Application owners choose the
-licensing and additional validation appropriate for their code. Git ignores
-`apps/*` by default so private application work is not staged accidentally;
-remove that rule from the root `.gitignore` to track an application in the
-fork.
+licensing and additional validation appropriate for their code. This fork
+tracks its applications, so the upstream `apps/*` ignore rule is removed from
+the root `.gitignore`.

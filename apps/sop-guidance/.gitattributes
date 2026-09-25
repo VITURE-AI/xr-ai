@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Detector weights are binary and several MB each: keep them in Git LFS.
+# (The directory is `detectors/`, not `models/`, because the root .gitignore
+# ignores `**/models/**`.)
+detectors/**/*.bin filter=lfs diff=lfs merge=lfs -text
+detectors/**/*.xml filter=lfs diff=lfs merge=lfs -text
+detectors/**/*.pt filter=lfs diff=lfs merge=lfs -text
