@@ -79,3 +79,32 @@ def test_docker_run_uses_pinned_image(monkeypatch: pytest.MonkeyPatch) -> None:
     # Everything after the image is passed to the container, not to docker.
     assert argv[image_at + 1] == "--config"
     assert not any(arg.endswith(":latest") for arg in argv)
+
+
+def test_external_server_is_awaited_without_docker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[object] = []
+    waited: list[int] = []
+
+    async def fake_exec(*cmd: str, **_kwargs: object) -> None:
+        calls.append(cmd)
+        raise AssertionError("docker must not run for an external server")
+
+    async def fake_wait(self: LiveKitDocker, port: int) -> None:
+        waited.append(port)
+
+    monkeypatch.setattr(_docker_mod.asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(_docker_mod.subprocess, "run", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(LiveKitDocker, "_wait_ready", fake_wait)
+
+    cfg = LiveKitConnectorConfig(
+        api_key="test-key", api_secret="test-secret",
+        lk_port_ws=7990, lk_manage_server=False,
+    )
+    docker = LiveKitDocker(cfg)
+    asyncio.run(docker.start())
+    asyncio.run(docker.stop())
+
+    assert waited == [7990]
+    assert calls == []

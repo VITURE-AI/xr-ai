@@ -79,6 +79,10 @@ class LiveKitConnectorConfig:
     # Some cloud NATs do not support the self-ping LiveKit uses to validate the
     # discovered IP. This setting has an effect only with external IP enabled.
     lk_skip_external_ip_validation: bool = False
+    # Start the LiveKit server container. Disable when the server is already
+    # running (for example as its own compose service); the hub then waits for
+    # it on lk_port_ws, and the external-IP settings above do not apply.
+    lk_manage_server: bool = True
 
     # ── Internal URL for the Python room client (direct WS, no proxy) ─────────
     lk_internal_url: str = "ws://127.0.0.1:7880"

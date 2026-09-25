@@ -94,6 +94,12 @@ class LiveKitDocker:
         self._log_task: asyncio.Task | None = None
 
     async def start(self) -> None:
+        if not self._cfg.lk_manage_server:
+            logger.info("Waiting for an external LiveKit server on port {}…",
+                        self._cfg.lk_port_ws)
+            await self._wait_ready(self._cfg.lk_port_ws)
+            logger.info("External LiveKit server ready on port {}", self._cfg.lk_port_ws)
+            return
         self._tmpdir = tempfile.TemporaryDirectory(prefix="xr_livekit_")
         cfg_path = Path(self._tmpdir.name) / "livekit.yaml"
         _write_livekit_config(cfg_path, self._cfg)
