@@ -28,8 +28,12 @@ COPY client-samples/web /workspace/client-samples/web
 RUN --mount=type=cache,target=/tmp/uv-cache \
     uv sync --project services/device-io-hub --no-dev
 
+# The development-certificate directory is a named volume; creating it here
+# owned by appuser makes Docker initialise the volume with that owner, or the
+# hub cannot restrict it to 0700 and exits.
 RUN useradd --uid 1000 --create-home appuser \
-    && chown -R appuser:appuser /workspace
+    && mkdir -p /home/appuser/.local/share/xr-ai \
+    && chown -R appuser:appuser /workspace /home/appuser/.local
 USER 1000:1000
 WORKDIR /workspace/services/device-io-hub
 CMD ["uv", "run", "--no-sync", "device_io_hub", "--config", "/etc/xr-ai/device_io_hub.yaml"]

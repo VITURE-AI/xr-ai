@@ -18,8 +18,7 @@ ENV PYTHONUNBUFFERED=1 \
     UV_CACHE_DIR=/tmp/uv-cache \
     UV_DEFAULT_INDEX=${PIP_INDEX_URL} \
     UV_INDEX=pytorch-cpu=${TORCH_INDEX_URL} \
-    UV_PYTHON_DOWNLOADS=never \
-    YOLO_CONFIG_DIR=/tmp/ultralytics
+    UV_PYTHON_DOWNLOADS=never
 
 RUN find /etc/apt -type f \( -name '*.sources' -o -name '*.list' \) \
         -exec sed -i "s|deb.debian.org|${APT_MIRROR_HOST}|g" {} + \
@@ -43,10 +42,13 @@ COPY apps/sop-guidance /workspace/apps/sop-guidance
 RUN --mount=type=cache,target=/tmp/uv-cache \
     uv sync --project apps/sop-guidance/worker --no-dev
 
+# /tmp is the volume shared with the hub, so Ultralytics keeps its settings in
+# the user's home instead.
 RUN useradd --uid 1000 --create-home appuser \
-    && mkdir -p /data/run \
-    && chown -R appuser:appuser /workspace /data/run
+    && mkdir -p /data/run /home/appuser/.config/ultralytics \
+    && chown -R appuser:appuser /workspace /data/run /home/appuser/.config
 USER 1000:1000
-ENV XR_RUN_DIR=/data/run
+ENV XR_RUN_DIR=/data/run \
+    YOLO_CONFIG_DIR=/home/appuser/.config/ultralytics
 WORKDIR /workspace/apps/sop-guidance/worker
 CMD ["uv", "run", "--no-sync", "sop_guidance_worker", "--config", "../yaml/sop_guidance_worker.yaml"]
