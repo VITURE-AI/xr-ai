@@ -154,7 +154,12 @@ class Interaction:
         """
 
         speaker = self._clients.explicit_input(pid) or pid
-        await self.dispatch(self._as_owner(speaker), text, timestamp_us or _now_us())
+        owner = self._as_owner(speaker)
+        timestamp_us = timestamp_us or _now_us()
+        # Typing counts as the wearer talking, like speech: a correction must
+        # leave its gap after it too.
+        self._speech.heard(owner, timestamp_us)
+        await self.dispatch(owner, text, timestamp_us)
 
     async def _is_request(self, text: str) -> bool:
         try:

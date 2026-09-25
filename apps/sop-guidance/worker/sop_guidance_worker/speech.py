@@ -139,7 +139,7 @@ class PlaybackTracker:
         if words >= 4 and audio_s >= 1.0:
             rate = min(max(words / audio_s, _MIN_WORDS_PER_S), _MAX_WORDS_PER_S)
             self._words_per_s += _RATE_WEIGHT * (rate - self._words_per_s)
-            logger.debug("PLAYBACK rate words={} audio={:.1f}s -> {:.2f} words/s",
+            logger.info("PLAYBACK rate words={} audio={:.1f}s -> {:.2f} words/s",
                          words, audio_s, self._words_per_s)
 
 

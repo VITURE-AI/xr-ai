@@ -53,6 +53,10 @@ if TYPE_CHECKING:
     from .config import EvaluatorSettings
 
 
+_UNSEEN_PREFIXES = ("i cannot see", "waiting for a fresh")
+_UNSEEN_REPEAT_US = 30_000_000
+
+
 def _now_us() -> int:
     return time.time_ns() // 1_000
 
@@ -240,6 +244,9 @@ class VlmRun:
         self._yes_since_us = 0
         self._last_result: CheckResult | None = None
         self._correction_state: dict[str, Any] = {}
+        # The last "no usable frame" result recorded, to coalesce repeats.
+        self._unseen_issue = ""
+        self._unseen_us = 0
         self._last_checked_live_ts = 0
         self._last_speaking_us = 0
 
@@ -495,6 +502,13 @@ class VlmRun:
             gap_s = min(corrections.max_gap_s, corrections.backoff_s * spoken_count)
         # The gap runs from the last thing the wearer HEARD or said, so a step is
         # never told and corrected in one breath.
+        # Re-read at decision time: a check launched in silence can land while
+        # an answer queued since is playing, and the gap must run from its end.
+        still_speaking = self._ctx.speech_remaining_s()
+        if still_speaking > 0.0:
+            self._last_speaking_us = max(self._last_speaking_us,
+                                         now_us + int(still_speaking * 1_000_000))
+            return
         heard_us = max(last_spoken_us, self._last_speaking_us, self._ctx.last_heard_us())
         if heard_us and now_us - heard_us < int(gap_s * 1_000_000):
             return
@@ -535,6 +549,8 @@ class VlmRun:
             logger.exception("guidance check error")
             recorder.note("CHECK_ERROR", error=f"{type(exc).__name__}: {exc}")
             result = CheckResult()
+        if self._repeated_unseen(result):
+            return result
         logger.info("GUIDANCE_MONITOR vlm-check {!r} -> {} evidence={} obs={!r}",
                     self._sop.instruction(step_idx)[:40],
                     "YES" if result.completed else "NO",
@@ -545,6 +561,25 @@ class VlmRun:
                       frame=result.image_path, tier=result.tier)
         await self._ctx.emit(Verdict(result.as_dict()))
         return result
+
+    def _repeated_unseen(self, result: CheckResult) -> bool:
+        """Whether *result* repeats a recent "no usable frame" result.
+
+        A camera that is off yields one such result per tick; recording and
+        publishing each flooded the session log and guidance.state. The first,
+        a change of reason, and one every half minute still go through.
+        """
+
+        issue = result.issue.strip()
+        unseen = not result.image_path and issue.lower().startswith(_UNSEEN_PREFIXES)
+        if not unseen:
+            self._unseen_issue = ""
+            return False
+        now_us = _now_us()
+        if issue == self._unseen_issue and now_us - self._unseen_us < _UNSEEN_REPEAT_US:
+            return True
+        self._unseen_issue, self._unseen_us = issue, now_us
+        return False
 
     async def _grade(self, step_idx: int, min_ts: int) -> CheckResult:
         student = await self._student_image(min_ts)

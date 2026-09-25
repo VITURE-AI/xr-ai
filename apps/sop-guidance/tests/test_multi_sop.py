@@ -195,3 +195,24 @@ def test_blank_and_tiny_frames_are_not_graded() -> None:
     assert _unusable_frame(textured, evaluator) == ""
     # Never spoken as a correction: the monitor treats it as a missing frame.
     assert is_parser_issue(_unusable_frame(black, evaluator))
+
+
+def test_repeated_no_frame_results_are_coalesced() -> None:
+    from types import SimpleNamespace
+
+    from sop_guidance.backends.vlm.grading import CheckResult
+    from sop_guidance.backends.vlm.run import VlmRun
+
+    run = SimpleNamespace(_unseen_issue="", _unseen_us=0)
+    blank = CheckResult(issue="I cannot see a usable camera frame (it is blank).")
+    graded = CheckResult(issue="The pad is still on.", image_path="/tmp/f.jpg")
+
+    def repeated(result: CheckResult) -> bool:
+        return VlmRun._repeated_unseen(run, result)  # type: ignore[arg-type]
+
+    # A camera that is off: the first result is recorded, the repeats are not.
+    assert repeated(blank) is False
+    assert repeated(blank) is True
+    # A real check always goes through and ends the run of repeats.
+    assert repeated(graded) is False
+    assert repeated(blank) is False
