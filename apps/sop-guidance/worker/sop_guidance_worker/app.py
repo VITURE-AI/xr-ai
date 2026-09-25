@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterable
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -156,9 +157,32 @@ def _llm_text(llm: Any):
     return ask
 
 
-async def _serve_api(app: Any, host: str, port: int) -> None:
-    server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, log_level="warning"))
-    await server.serve()
+async def _close_backends(procedures: Iterable[LoadedProcedure]) -> None:
+    # Backends holding outside resources (a remote sidecar connection, shared
+    # memory) expose aclose(); in-process ones have nothing to release.
+    for procedure in procedures:
+        aclose = getattr(procedure.backend, "aclose", None)
+        if aclose is None:
+            continue
+        try:
+            await aclose()
+        except Exception:
+            logger.exception("backend {} failed to close", procedure.id)
+
+
+def _api_server(app: Any, host: str, port: int) -> uvicorn.Server:
+    return uvicorn.Server(uvicorn.Config(app, host=host, port=port, log_level="warning"))
+
+
+async def _stop_api(server: uvicorn.Server, task: asyncio.Task[None]) -> None:
+    # Ask uvicorn to finish its lifespan first: cancelling the serve task
+    # outright makes Starlette log the lifespan's CancelledError as an error.
+    server.should_exit = True
+    done, _ = await asyncio.wait({task}, timeout=5.0)
+    if not done:
+        task.cancel()
+    with suppress(asyncio.CancelledError, Exception):
+        await task
 
 
 async def run_app(config: WorkerConfig, *, ready_file: Path | None = None) -> None:
@@ -205,6 +229,8 @@ async def run_app(config: WorkerConfig, *, ready_file: Path | None = None) -> No
     preview = PreviewManager(
         endpoint=endpoint, frames=frames, fps=config.preview.fps,
         live_annotator=lambda: live_annotator, recorder=recorder_for,
+        box_painter=FrameAnnotator(DetectorProfile(enabled=False),
+                                   artifacts_dir=config.run_dir / "artifacts" / "overlays" / "backend"),
     )
     speech = SpeechRouter(
         endpoint=endpoint, tracker=tracker, publish=runtime_publisher(runtime),
@@ -271,11 +297,9 @@ async def run_app(config: WorkerConfig, *, ready_file: Path | None = None) -> No
     ))
     runtime.register("voice", voice)
 
-    api_task = asyncio.create_task(
-        _serve_api(create_api(host=host, store=store, config=config.api),
-                   config.api.host, config.api.port),
-        name="sop-guidance-api",
-    )
+    api_server = _api_server(create_api(host=host, store=store, config=config.api),
+                             config.api.host, config.api.port)
+    api_task = asyncio.create_task(api_server.serve(), name="sop-guidance-api")
     logger.info("sop-guidance worker starting: {} procedures, API on {}:{}",
                 len(procedures), config.api.host, config.api.port)
     try:
@@ -286,10 +310,9 @@ async def run_app(config: WorkerConfig, *, ready_file: Path | None = None) -> No
                 await interaction.aclose()
                 await host.shutdown()
                 await preview.aclose()
+                await _close_backends(procedures)
     finally:
-        api_task.cancel()
-        with suppress(asyncio.CancelledError, Exception):
-            await api_task
+        await _stop_api(api_server, api_task)
         await store.aclose()
     logger.info("sop-guidance worker stopped")
 

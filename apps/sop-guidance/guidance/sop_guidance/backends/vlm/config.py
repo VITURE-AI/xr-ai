@@ -83,6 +83,16 @@ class EvaluatorSettings(_Section):
     jpeg_quality: int = Field(default=85, ge=10, le=100)
     """Encoding quality of the graded student frame."""
 
+    min_frame_size: tuple[int, int] = (160, 120)
+    """Smallest (width, height) graded; smaller frames wait for the camera."""
+
+    blank_max_std: float = Field(default=4.0, ge=0.0)
+    """A frame whose pixel spread is at most this is blank and never graded.
+
+    A camera that is off, covered or not yet streaming sends uniform frames,
+    and the comparison then describes the teacher's reference instead.
+    """
+
 
 class DetectorSettings(_Section):
     """The detector profile whose boxes are drawn and fed to geometry."""

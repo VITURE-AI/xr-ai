@@ -452,13 +452,18 @@ class SessionStore:
             raise ValueError("Only stopped, interrupted, or replaced sessions can be resumed.")
         return dict(meta), checkpoint
 
-    def latest_resumable(self, owner: str, procedure_id: str) -> str:
-        """Most recently ended resumable session of ``owner`` for a procedure, or ""."""
+    def latest_resumable(self, owner: str, procedure_id: str = "") -> str:
+        """Most recently ended resumable session of ``owner``, or "".
+
+        With ``procedure_id`` only that procedure's sessions count.
+        """
         self._ensure_loaded()
         matches = [
             meta
             for meta in self._metas.values()
-            if meta.get("owner") == owner and meta.get("procedure_id") == procedure_id and meta.get("resumable")
+            if meta.get("owner") == owner
+            and (not procedure_id or meta.get("procedure_id") == procedure_id)
+            and meta.get("resumable")
         ]
         if not matches:
             return ""

@@ -34,6 +34,7 @@ recorder = [
 
 [project.entry-points."sop_guidance.backends"]
 vlm = "sop_guidance.backends.vlm:create_backend"
+remote = "sop_guidance.backends.remote:create_backend"
 
 [tool.uv.sources]
 xr-ai-agent-runtime = { path = "../../../agent-sdk/xr-ai-runtime", editable = true }

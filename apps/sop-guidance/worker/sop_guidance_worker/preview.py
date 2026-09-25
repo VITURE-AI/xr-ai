@@ -21,7 +21,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 
 from loguru import logger
-from sop_guidance.backends.base import TimedFrame
+from sop_guidance.backends.base import OverlayUpdate, TimedFrame
 from sop_guidance.recorder import SessionHandle
 from sop_guidance.vision import FrameAnnotator, bgr_to_jpeg, bgr_to_rgb24, frame_to_bgr
 from xr_ai_hub import FrameSignal, ParticipantEvent, PixelFormat, ProcessorEndpoint, ReturnVideoFrame
@@ -134,6 +134,11 @@ class _Loop:
     source: str
     guidance: bool
     task: asyncio.Task[None]
+    backend_boxes: bool = False
+
+
+# Backend boxes older than this are stale and no longer drawn.
+_OVERLAY_MAX_AGE_S = 2.0
 
 
 class PreviewManager:
@@ -147,23 +152,41 @@ class PreviewManager:
         fps: float,
         live_annotator: Callable[[], FrameAnnotator | None],
         recorder: Callable[[str], SessionHandle | None],
+        box_painter: FrameAnnotator | None = None,
     ) -> None:
         self._ep = endpoint
         self._frames = frames
         self._fps = fps
         self._live_annotator = live_annotator
         self._recorder = recorder
+        # Draws boxes a backend supplies itself (``provides_overlay``); its own
+        # detector is never run.
+        self._box_painter = box_painter
         self._loops: dict[str, _Loop] = {}
+        self._overlays: dict[str, tuple[float, OverlayUpdate]] = {}
 
     def running(self, recipient: str) -> _Loop | None:
         return self._loops.get(recipient)
 
     async def start_guidance(self, recipient: str, source: str,
-                             annotator: FrameAnnotator | None) -> None:
+                             annotator: FrameAnnotator | None,
+                             *, backend_boxes: bool = False) -> None:
+        """Preview *source* for *recipient* during guidance.
+
+        With ``backend_boxes`` the frames carry the boxes the backend last sent
+        through :meth:`set_overlay` instead of *annotator*'s detections.
+        """
+
         await self.stop(recipient)
         if self._fps <= 0:
             return
-        self._start(recipient, source, annotator, guidance=True)
+        self._start(recipient, source, None if backend_boxes else annotator,
+                    guidance=True, backend_boxes=backend_boxes)
+
+    def set_overlay(self, recipient: str, update: OverlayUpdate) -> None:
+        """The boxes a backend wants on *recipient*'s preview from now on."""
+
+        self._overlays[recipient] = (time.monotonic(), update)
 
     async def start_live(self, recipient: str, source: str) -> None:
         """Start or re-point the live preview; a no-op when already on *source*."""
@@ -188,6 +211,7 @@ class PreviewManager:
             return
         loop.task.cancel()
         await asyncio.gather(loop.task, return_exceptions=True)
+        self._overlays.pop(recipient, None)
         with suppress(Exception):
             await self._ep.stop_return_video(recipient)
 
@@ -196,15 +220,22 @@ class PreviewManager:
             await self.stop(recipient)
 
     def _start(self, recipient: str, source: str, annotator: FrameAnnotator | None,
-               *, guidance: bool) -> None:
+               *, guidance: bool, backend_boxes: bool = False) -> None:
         task = asyncio.create_task(
-            self._run(recipient, source, annotator, guidance=guidance),
+            self._run(recipient, source, annotator, guidance=guidance,
+                      backend_boxes=backend_boxes),
             name=f"preview:{recipient}",
         )
-        self._loops[recipient] = _Loop(recipient, source, guidance, task)
+        self._loops[recipient] = _Loop(recipient, source, guidance, task, backend_boxes)
+
+    def _backend_boxes(self, recipient: str) -> OverlayUpdate | None:
+        entry = self._overlays.get(recipient)
+        if entry is None or time.monotonic() - entry[0] > _OVERLAY_MAX_AGE_S:
+            return None
+        return entry[1]
 
     async def _run(self, recipient: str, source: str, annotator: FrameAnnotator | None,
-                   *, guidance: bool) -> None:
+                   *, guidance: bool, backend_boxes: bool = False) -> None:
         period = 1.0 / self._fps
         last_pts = 0
         failures = 0
@@ -243,6 +274,10 @@ class PreviewManager:
                         # untouched for anything that needs them unannotated.
                         annotated = await annotator.annotate_array(image.copy(), stream=source)
                         drawn = annotated.image
+                    elif backend_boxes and self._box_painter is not None:
+                        update = self._backend_boxes(recipient)
+                        if update is not None and update.detections:
+                            drawn = self._box_painter.draw(image.copy(), list(update.detections))
                     if guidance:
                         self._frames.store(TimedFrame(
                             participant_id=source, timestamp_us=data.pts_us,

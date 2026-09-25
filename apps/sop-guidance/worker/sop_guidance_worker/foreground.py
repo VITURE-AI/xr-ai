@@ -226,7 +226,10 @@ class Foreground:
             if self._host.reminder_due(pid) and not STEP_ANNOUNCEMENT.search(reply):
                 # After a detour, one line brings them back to the work.
                 self._host.mark_reminded(pid)
-                reply = f"{reply} When you're ready, we're still on step {step_at_start + 1}."
+                ended = reply.rstrip()
+                if ended[-1:] not in ".!?":
+                    ended += "."
+                reply = f"{ended} When you're ready, we're still on step {step_at_start + 1}."
         await self._host.say(pid, reply, kind="answer")
 
     def _active_system(self, session: GuidanceSession, block: str, has_frame: bool) -> str:

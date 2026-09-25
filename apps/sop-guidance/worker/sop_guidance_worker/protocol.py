@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from loguru import logger
@@ -134,7 +134,10 @@ class WorkerPorts:
         return await self._frames.fetch(participant_id)
 
     async def start_preview(self, owner: str, input_pid: str, backend: ProcedureBackend) -> None:
-        await self._preview.start_guidance(owner, input_pid, backend.preview_annotator())
+        if backend.capabilities.provides_overlay:
+            await self._preview.start_guidance(owner, input_pid, None, backend_boxes=True)
+        else:
+            await self._preview.start_guidance(owner, input_pid, backend.preview_annotator())
 
     async def stop_preview(self, owner: str) -> None:
         await self._preview.stop(owner)
@@ -142,9 +145,10 @@ class WorkerPorts:
             await self._preview.start_live(owner, self._clients.input_of(owner))
 
     async def overlay_update(self, owner: str, update: OverlayUpdate) -> None:
+        self._preview.set_overlay(owner, update)
         await self._speech.send(owner, OVERLAY_TOPIC, {
             "timestamp_us": update.timestamp_us,
-            "detections": list(update.detections),
+            "detections": [asdict(d) for d in update.detections],
             "extra": dict(update.extra),
         })
 

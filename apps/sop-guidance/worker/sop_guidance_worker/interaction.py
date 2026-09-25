@@ -225,8 +225,16 @@ class Interaction:
         if entry is not None and not (session is not None and entry[0] == "resume"
                                       and not entry[2]):
             target = entry[2]
-            procedure = (host.match_procedure(target) if target
-                         else session.procedure if session is not None else None)
+            if target:
+                procedure = host.match_procedure(target)
+            elif session is not None:
+                procedure = session.procedure
+            elif entry[0] == "resume":
+                # A bare "resume", as the stop message invites: the speaker's
+                # last stopped session, whichever procedure it was.
+                procedure = host.resumable_procedure(pid)
+            else:
+                procedure = None
             if procedure is not None:
                 reply = await host.begin(pid, procedure.id, request=request, explicit=True)
                 await self._speech.say(pid, reply.message)

@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 from conftest import HostHarness, settle
 from fastapi.testclient import TestClient
+from sop_guidance.backends.base import RunCommand
 from sop_guidance_worker.api import create_api
 from sop_guidance_worker.config import ApiConfig, WorkerConfig
 from sop_guidance_worker.interaction import Interaction
@@ -57,6 +58,13 @@ class Clock:
 # ── speech ───────────────────────────────────────────────────────────────────
 
 
+def _chunk(pid: str, seconds: float) -> AudioChunk:
+    return AudioChunk(
+        pts_us=0, sample_rate=24000, channels=1, samples=int(24000 * seconds), data=b"",
+        participant_id=pid, track_id="tts",
+    )
+
+
 async def test_tracker_follows_real_audio() -> None:
     clock = Clock()
     tracker = PlaybackTracker(slack_s=0.3, clock=clock)
@@ -66,17 +74,59 @@ async def test_tracker_follows_real_audio() -> None:
     tracker.enqueued("alice", "one two three four five six")
     assert tracker.remaining_s("alice") > 2.0  # estimate before audio flows
 
-    await endpoint.send_return_audio(AudioChunk(
-        pts_us=0, sample_rate=24000, channels=1, samples=48000, data=b"",
-        participant_id="alice", track_id="tts",
-    ))
-    assert tracker.remaining_s("alice") == pytest.approx(2.3)
+    # Audio longer than the estimate extends it.
+    await endpoint.send_return_audio(_chunk("alice", 5.0))
+    assert tracker.remaining_s("alice") == pytest.approx(5.3)
     clock.now += 1.0
-    assert tracker.remaining_s("alice") == pytest.approx(1.3)
+    assert tracker.remaining_s("alice") == pytest.approx(4.3)
 
     await endpoint.flush_return_audio("alice")
     assert tracker.remaining_s("alice") == 0.0
     assert endpoint.flushed == ["alice"]
+
+
+async def test_tracker_keeps_the_estimate_while_paced_audio_flows() -> None:
+    # The voice runtime hands audio over in real time, a few chunks ahead of
+    # playback: the first chunk must not make a long instruction look done.
+    clock = Clock()
+    tracker = PlaybackTracker(slack_s=0.3, clock=clock)
+    endpoint = FakeEndpoint()
+    tracker.install(endpoint)  # type: ignore[arg-type]
+
+    tracker.enqueued("alice", " ".join(["word"] * 26))  # about 11 s at the default rate
+    clock.now += 1.0
+    await endpoint.send_return_audio(_chunk("alice", 0.12))
+    assert tracker.remaining_s("alice") > 9.0
+    for _ in range(40):
+        clock.now += 0.1
+        await endpoint.send_return_audio(_chunk("alice", 0.1))
+    assert tracker.remaining_s("alice") > 5.0
+
+
+async def test_tracker_calibrates_the_speaking_rate() -> None:
+    clock = Clock()
+    tracker = PlaybackTracker(slack_s=0.3, clock=clock)
+    endpoint = FakeEndpoint()
+    tracker.install(endpoint)  # type: ignore[arg-type]
+    default = tracker.words_per_s
+
+    # Twenty words that take ten seconds: a slower voice than the default.
+    tracker.enqueued("alice", " ".join(["word"] * 20))
+    for _ in range(100):
+        await endpoint.send_return_audio(_chunk("alice", 0.1))
+        clock.now += 0.1
+    clock.now += 5.0
+    tracker.enqueued("alice", "next line")
+    assert 2.0 < tracker.words_per_s < default
+
+    # An interrupted utterance does not count.
+    rate = tracker.words_per_s
+    tracker.enqueued("bob", " ".join(["word"] * 20))
+    await endpoint.send_return_audio(_chunk("bob", 1.0))
+    await endpoint.flush_return_audio("bob")
+    clock.now += 5.0
+    tracker.enqueued("bob", "again")
+    assert tracker.words_per_s == rate
 
 
 async def test_router_modes_and_interrupt() -> None:
@@ -222,6 +272,42 @@ async def test_guidance_fast_paths(harness: HostHarness) -> None:
     assert "Stopped guidance for 'lid demo' at step 2 of 3" in harness.ports.texts("alice")[-1]
 
 
+async def test_bare_resume_after_a_stop(harness: HostHarness) -> None:
+    # The stop message says "Say resume to pick up there": no procedure name.
+    interaction, foreground, _, _, _ = _interaction(harness)
+    host = harness.host
+    await host.begin("alice", "lid-demo")
+    await host.command("alice", RunCommand("next"))
+    await host.stop("alice", reason="wearer_request")
+
+    for said in ("Hey Helix, resume guidance", "Hey Helix, resume"):
+        await interaction.on_speech("alice", said, 1)
+        await _drain(interaction)
+        assert foreground.asked == []
+        assert harness.host.session_of("alice") is not None
+        assert harness.backend.runs[-1].step == 1
+        await host.stop("alice", reason="wearer_request")
+
+    # Someone with nothing stopped gets the model, not someone else's session.
+    await interaction.on_speech("bob", "Hey Helix, resume", 2)
+    await _drain(interaction)
+    assert harness.host.session_of("bob") is None
+    assert foreground.asked
+
+
+async def test_control_resume_defaults_to_the_latest_session(harness: HostHarness) -> None:
+    host = harness.host
+    nothing = await host.resume("alice", "")
+    assert nothing.status == "error"
+
+    await host.begin("alice", "lid-demo")
+    await host.command("alice", RunCommand("next"))
+    await host.stop("alice", reason="wearer_request")
+    reply = await host.resume("alice", "")
+    assert reply.status == "started"
+    assert harness.backend.runs[-1].step == 1
+
+
 async def test_wearer_glasses_drive_the_operator_session(harness: HostHarness) -> None:
     interaction, foreground, _, _, _ = _interaction(harness)
     await harness.host.begin("alice", "lid-demo")
@@ -347,3 +433,32 @@ def test_api_serves_procedures_and_requires_the_token(
     assert client.get("/api/procedures/lid-demo/files/../../x.jpg",
                       headers=auth).status_code == 404
     assert client.get("/api/sessions", headers=auth).json()["sessions"] == []
+
+
+async def test_backend_overlay_reaches_clients_and_the_preview() -> None:
+    from sop_guidance.backends.base import OverlayUpdate
+    from sop_guidance.vision import Detection
+    from sop_guidance_worker.protocol import WorkerPorts
+
+    sent: list[tuple[str, str, object]] = []
+    overlays: list[tuple[str, OverlayUpdate]] = []
+
+    class Speech:
+        async def send(self, owner: str, topic: str, payload: object) -> None:
+            json.dumps(payload)  # must be JSON-safe: Detection dataclasses were not
+            sent.append((owner, topic, payload))
+
+    class Preview:
+        def set_overlay(self, owner: str, update: OverlayUpdate) -> None:
+            overlays.append((owner, update))
+
+    ports = WorkerPorts(speech=Speech(), frames=None, preview=Preview(),  # type: ignore[arg-type]
+                        clients=None)  # type: ignore[arg-type]
+    update = OverlayUpdate(timestamp_us=5, detections=(Detection("lid", 1, 2, 3, 4, 0.9),),
+                           extra={"holes": [1]})
+    await ports.overlay_update("alice", update)
+
+    assert overlays == [("alice", update)]
+    owner, topic, payload = sent[0]
+    assert (owner, topic) == ("alice", "guidance.overlay")
+    assert payload["detections"][0]["label"] == "lid"  # type: ignore[index]

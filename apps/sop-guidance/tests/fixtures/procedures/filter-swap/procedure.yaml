@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# A second SOP added as data only: the built-in vlm backend grades it from
+# sop.json and a reference frame, with no detector, geometry or Python.
+
+id: filter-swap
+title: water filter swap
+aliases: [water filter, jug filter, change the filter]
+description: Replace the filter cartridge in a water jug.
+backend: vlm
+
+backend_config:
+  sop: sop.json

@@ -7,9 +7,12 @@ The guidance monitor must not grade a step while its own instruction is still
 being read out, and a correction must not talk over the wearer. Both need an
 estimate of when queued speech ends, which the voice runtime does not expose,
 so :class:`PlaybackTracker` watches the audio actually handed to the hub: each
-chunk extends a per-recipient deadline by its duration. Between queuing text
-and the first synthesized chunk there is no audio to watch, so a word-rate
-estimate stands in until audio flows.
+chunk extends a per-recipient deadline by its duration. The voice runtime
+paces that audio in real time, only a fraction of a second ahead of playback,
+so the chunks alone never show how much of an utterance is still to come. A
+word-rate estimate made when the text is queued therefore stays in force
+until the audio has covered it, and each finished utterance recalibrates the
+rate to the voice actually speaking.
 """
 
 from __future__ import annotations
@@ -29,7 +32,12 @@ USER_ECHO_TOPIC = "chat.user"
 PROGRESS_TOPIC = "agent.progress"
 
 _WORDS_PER_S = 2.6
+_MIN_WORDS_PER_S = 1.2
+_MAX_WORDS_PER_S = 4.5
+_RATE_WEIGHT = 0.3
 _SYNTH_LATENCY_S = 1.0
+# Audio that stops for this long ends an utterance and calibrates the rate.
+_UTTERANCE_GAP_S = 0.6
 
 
 def _now_us() -> int:
@@ -47,8 +55,16 @@ class PlaybackTracker:
     ) -> None:
         self._slack_s = slack_s
         self._clock = clock
+        self._words_per_s = _WORDS_PER_S
         self._deadline: dict[str, float] = {}
         self._pending: dict[str, float] = {}
+        # Words queued and audio heard since the recipient last fell silent.
+        self._words: dict[str, int] = {}
+        self._audio_s: dict[str, float] = {}
+
+    @property
+    def words_per_s(self) -> float:
+        return self._words_per_s
 
     def install(self, endpoint: ProcessorEndpoint) -> None:
         """Observe *endpoint*'s return audio and flushes.
@@ -73,21 +89,27 @@ class PlaybackTracker:
         endpoint.flush_return_audio = flush_return_audio  # type: ignore[method-assign]
 
     def enqueued(self, participant_id: str, text: str) -> None:
-        estimate = _SYNTH_LATENCY_S + len(text.split()) / _WORDS_PER_S
         now = self._clock()
+        self._settle(participant_id, now)
+        words = len(text.split())
+        self._words[participant_id] = self._words.get(participant_id, 0) + words
+        estimate = _SYNTH_LATENCY_S + words / self._words_per_s
         base = max(self._deadline.get(participant_id, now), self._pending.get(participant_id, now))
         self._pending[participant_id] = max(base, now) + estimate
 
     def audio_sent(self, participant_id: str, duration_s: float) -> None:
         now = self._clock()
+        self._settle(participant_id, now)
         start = max(self._deadline.get(participant_id, now), now)
         self._deadline[participant_id] = start + duration_s
-        # Real audio replaces the estimate; later text re-arms it.
-        self._pending.pop(participant_id, None)
+        self._audio_s[participant_id] = self._audio_s.get(participant_id, 0.0) + duration_s
 
     def flushed(self, participant_id: str) -> None:
+        # Interrupted speech says nothing about the voice's rate.
         self._deadline.pop(participant_id, None)
         self._pending.pop(participant_id, None)
+        self._words.pop(participant_id, None)
+        self._audio_s.pop(participant_id, None)
 
     def remaining_s(self, participant_id: str) -> float:
         now = self._clock()
@@ -99,6 +121,26 @@ class PlaybackTracker:
         if pending is not None and pending > now:
             remaining = max(remaining, pending - now)
         return remaining
+
+    def _settle(self, participant_id: str, now: float) -> None:
+        """Close the recipient's utterance once its audio has gone quiet."""
+
+        deadline = self._deadline.get(participant_id)
+        if deadline is None or now - deadline < _UTTERANCE_GAP_S:
+            return
+        pending = self._pending.get(participant_id)
+        if pending is not None and pending > now:
+            # Queued text not yet synthesized: the utterance is still going.
+            return
+        words = self._words.pop(participant_id, 0)
+        audio_s = self._audio_s.pop(participant_id, 0.0)
+        self._deadline.pop(participant_id, None)
+        self._pending.pop(participant_id, None)
+        if words >= 4 and audio_s >= 1.0:
+            rate = min(max(words / audio_s, _MIN_WORDS_PER_S), _MAX_WORDS_PER_S)
+            self._words_per_s += _RATE_WEIGHT * (rate - self._words_per_s)
+            logger.debug("PLAYBACK rate words={} audio={:.1f}s -> {:.2f} words/s",
+                         words, audio_s, self._words_per_s)
 
 
 VoiceOutputMode = str

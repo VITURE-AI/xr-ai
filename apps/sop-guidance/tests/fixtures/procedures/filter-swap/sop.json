@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "name": "water filter swap",
+  "summary": "Replace the filter cartridge in a water jug.",
+  "steps": [
+    {
+      "description": "Lift the old filter cartridge out of the jug."
+    },
+    {
+      "description": "Press the new filter cartridge into the jug until it clicks.",
+      "image": "frames/step_02.jpg",
+      "teacher_caption": "A white filter cartridge seated in the funnel of a water jug.",
+      "expected_requirements": ["New cartridge seated in the funnel"],
+      "key_info": {
+        "objects": ["filter cartridge", "water jug"],
+        "action": "press the cartridge into the funnel",
+        "target_state": "cartridge seated flush in the funnel"
+      }
+    },
+    {
+      "description": "Put the lid back on the jug."
+    }
+  ]
+}

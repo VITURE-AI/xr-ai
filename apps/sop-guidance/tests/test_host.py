@@ -22,7 +22,7 @@ async def test_start_announces_the_first_step_verbatim(harness: HostHarness) -> 
     assert state["status"] == "running"
     assert state["step"] == 1 and state["total_steps"] == 3
     assert state["backend"] == "scripted"
-    assert state["extra"] == {"holes": [0]}
+    assert state["extra"] == {"holes": [0], "cues": 0}
 
 
 async def test_unknown_procedure_is_refused(harness: HostHarness) -> None:

@@ -50,6 +50,7 @@ from .grading import (
 
 if TYPE_CHECKING:
     from .backend import VlmBackend
+    from .config import EvaluatorSettings
 
 
 def _now_us() -> int:
@@ -58,6 +59,23 @@ def _now_us() -> int:
 
 def _safe_stem(value: str) -> str:
     return "".join(c if c.isalnum() or c in "-_." else "_" for c in value)
+
+
+def _unusable_frame(image: Any, evaluator: EvaluatorSettings) -> str:
+    """Why *image* cannot be graded, or ``""``.
+
+    The wording starts with "I cannot see" so the monitor treats it as a
+    missing frame, never as something to say to the wearer.
+    """
+
+    height, width = image.shape[:2]
+    min_w, min_h = evaluator.min_frame_size
+    if width < min_w or height < min_h:
+        return f"I cannot see a usable camera frame ({width}x{height} is too small)."
+    # A strided sample keeps this cheap at full resolution.
+    if float(image[::8, ::8].std()) <= evaluator.blank_max_std:
+        return "I cannot see a usable camera frame (it is blank)."
+    return ""
 
 
 class VlmRun:
@@ -407,7 +425,9 @@ class VlmRun:
             self._last_checked_live_ts = result.timestamp_us
         if result.completed and result.has_evidence:
             self._consecutive_yes += 1
-            self._correction_state = {}
+            # The correction back-off is kept: one flickering YES between two
+            # failures is not the wearer fixing the problem, and a new step
+            # restarts it anyway.
             now_us = _now_us()
             if self._yes_since_us == 0:
                 self._yes_since_us = now_us
@@ -457,13 +477,14 @@ class VlmRun:
         now_us = _now_us()
         state = self._correction_state
         key = missing_key or issue
-        same_key = state.get("step_idx") == step_idx and state.get("key") == key
-        # Times this problem has been SPOKEN, not offered: counting offers drove
-        # the back-off to its cap within seconds and muted corrections.
-        spoken_count = int(state.get("count", 0)) if same_key else 0
-        # The gap is per STEP, not per wording: the model phrases one unchanged
-        # problem differently each cycle, and keying on the text restarted it.
+        # Both the back-off count and the gap are per STEP, not per wording: the
+        # model names one unchanged problem differently each cycle (even its
+        # missing_or_mismatched entry), and keying on it restarted the back-off
+        # so the same sentence repeated every few seconds.
         same_step = state.get("step_idx") == step_idx
+        # Times a correction has been SPOKEN, not offered: counting offers drove
+        # the back-off to its cap within seconds and muted corrections.
+        spoken_count = int(state.get("count", 0)) if same_step else 0
         last_spoken_us = int(state.get("last_spoken_us", 0)) if same_step else 0
         state.update({"step_idx": step_idx, "key": key, "issue": issue,
                       "count": spoken_count, "last_spoken_us": last_spoken_us})
@@ -602,6 +623,9 @@ class VlmRun:
                         return CheckResult(timestamp_us=frame.timestamp_us,
                                            issue=f"YOLO overlay unavailable: {exc}")
                     logger.warning("student frame annotation failed: {}", exc)
+        unusable = _unusable_frame(frame.image, evaluator)
+        if unusable:
+            return CheckResult(timestamp_us=frame.timestamp_us, issue=unusable)
         annotated = frame.annotated
         image = annotated.image if annotated is not None else frame.image
         path = await asyncio.to_thread(self._write_student_frame, image, frame.timestamp_us)

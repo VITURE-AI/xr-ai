@@ -287,7 +287,7 @@ def guidance_request(text: str) -> tuple[str, int, str] | None:
     )
     target = " ".join(target.split())
     if target in {"", "it", "this", "that", "the procedure", "the guide", "it from there",
-                  "from there"}:
+                  "from there", "guidance", "the guidance", "my guidance", "guiding"}:
         target = ""
     return mode, step, target
 

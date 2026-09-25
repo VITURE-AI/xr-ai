@@ -168,6 +168,7 @@ class GuidanceSession:
     last_verdict: Mapping[str, Any] = field(default_factory=dict)
     last_reminder_us: int = 0
     heartbeat: asyncio.Task[None] | None = None
+    frame_pump: asyncio.Task[None] | None = None
     ended: bool = False
 
     @property
@@ -460,6 +461,7 @@ class GuidanceHost:
         *,
         step_index: int,
         resume_id: str = "",
+        inherit_input: str = "",
     ) -> HostReply:
         conflict = self._conflict_for(pid, procedure)
         if conflict is not None:
@@ -483,7 +485,8 @@ class GuidanceHost:
         session = GuidanceSession(
             session_id=handle.session_id,
             owner=pid,
-            input_pid=self._ports.resolve_input(pid, str(checkpoint.get("input_participant", ""))),
+            input_pid=self._ports.resolve_input(pid, self._saved_input(pid, checkpoint,
+                                                                       inherit_input)),
             procedure=procedure,
             recorder=handle,
             started_at_us=_now_us(),
@@ -496,8 +499,9 @@ class GuidanceHost:
         self._sessions[pid] = session
         logger.info("GUIDANCE_START procedure={} steps={} owner={} input={}",
                     procedure.id, procedure.total_steps, pid, session.input_pid)
-        if not procedure.backend.capabilities.provides_overlay:
-            await self._ports.start_preview(pid, session.input_pid, procedure.backend)
+        # Always a preview: a backend that draws its own overlay gets its boxes
+        # drawn on it instead of the host detector's.
+        await self._ports.start_preview(pid, session.input_pid, procedure.backend)
         try:
             session.run = await procedure.backend.open_run(
                 _SessionContext(self, session),
@@ -512,10 +516,25 @@ class GuidanceHost:
         self._checkpoint(session)
         session.heartbeat = asyncio.create_task(self._heartbeat(session),
                                                 name=f"guidance-heartbeat-{pid}")
+        if procedure.backend.capabilities.frame_hz > 0:
+            session.frame_pump = asyncio.create_task(self._pump_frames(session),
+                                                     name=f"guidance-frames-{pid}")
         return HostReply("started", "", session_id=session.session_id, owner=pid,
                          input_participant=session.input_pid)
 
     # ── takeover ─────────────────────────────────────────────────────────────
+
+    def _saved_input(self, pid: str, checkpoint: Mapping[str, Any], inherit: str) -> str:
+        """The camera a new session should prefer before *pid*'s own default.
+
+        A resumed session keeps its saved camera. A takeover inherits the
+        superseded session's camera, unless *pid* picked one explicitly.
+        """
+
+        saved = str(checkpoint.get("input_participant", "")) if checkpoint else ""
+        if saved or not inherit:
+            return saved
+        return inherit if self._ports.resolve_input(pid, "") == pid else ""
 
     def _offer_takeover(
         self, pid: str, active: GuidanceSession, procedure_id: str, step_index: int,
@@ -562,12 +581,15 @@ class GuidanceHost:
                 except ValueError as exc:
                     return HostReply("error", str(exc))
             old_owner = active.owner
+            # Taking over a session keeps its camera: the operator takes over
+            # what the wearer's glasses are showing, not their own webcam.
+            old_input = active.input_pid
             await self._exit(active, outcome="superseded", reason="participant_takeover",
                              speak=False)
             notice = f'Your guidance was stopped because participant "{pid}" took over.'
             await self._ports.say(old_owner, notice, kind="status")
             return await self._enter(procedure, pid, step_index=pending.step_index,
-                                     resume_id=pending.resume_id)
+                                     resume_id=pending.resume_id, inherit_input=old_input)
 
     def cancel_takeover(self, pid: str, token: str | None = None) -> HostReply:
         pending = self._takeovers.get(pid)
@@ -599,9 +621,37 @@ class GuidanceHost:
             return HostReply("ok", message, session_id=session.session_id,
                              owner=session.owner)
 
+    def latest_resumable(self, pid: str) -> str:
+        """*pid*'s most recently stopped session that can still resume, or "".
+
+        What a bare "resume" means: the stop message tells the wearer to say
+        just that, without naming the procedure again.
+        """
+
+        return self._latest_resumable(pid)[0]
+
+    def resumable_procedure(self, pid: str) -> LoadedProcedure | None:
+        """The procedure of :meth:`latest_resumable`'s session, if any."""
+
+        return self._latest_resumable(pid)[1]
+
+    def _latest_resumable(self, pid: str) -> tuple[str, LoadedProcedure | None]:
+        session_id = self._store.latest_resumable(pid)
+        if not session_id:
+            return "", None
+        try:
+            procedure, _ = self._validate_resume(session_id)
+        except ValueError:
+            return "", None
+        return session_id, procedure
+
     async def resume(self, pid: str, session_id: str) -> HostReply:
         """Resume a saved session from a client control."""
 
+        if not session_id:
+            session_id = self.latest_resumable(pid)
+            if not session_id:
+                return HostReply("error", "There is no stopped guidance to resume.")
         async with self._lock:
             try:
                 procedure, step = self._validate_resume(session_id)
@@ -653,12 +703,10 @@ class GuidanceHost:
             session = self._sessions.get(owner)
             if session is None or source == session.input_pid or session.run is None:
                 return
-            if not session.procedure.backend.capabilities.provides_overlay:
-                await self._ports.stop_preview(owner)
+            await self._ports.stop_preview(owner)
             session.input_pid = source
             await session.run.input_changed()
-            if not session.procedure.backend.capabilities.provides_overlay:
-                await self._ports.start_preview(owner, source, session.procedure.backend)
+            await self._ports.start_preview(owner, source, session.procedure.backend)
             self._checkpoint(session)
             await self._publish(session)
 
@@ -671,16 +719,16 @@ class GuidanceHost:
         session.ended = True
         snapshot = session.run.snapshot() if session.run is not None else None
         stopped_at = snapshot.step_index if snapshot is not None else 0
-        if session.heartbeat is not None and session.heartbeat is not asyncio.current_task():
-            session.heartbeat.cancel()
+        for task in (session.heartbeat, session.frame_pump):
+            if task is not None and task is not asyncio.current_task():
+                task.cancel()
         self._checkpoint(session)
         if session.run is not None:
             try:
                 await session.run.close(reason or outcome)
             except Exception:
                 logger.exception("guidance run close failed")
-        if not session.procedure.backend.capabilities.provides_overlay:
-            await self._ports.stop_preview(session.owner)
+        await self._ports.stop_preview(session.owner)
         procedure = session.procedure
         completed = outcome == "completed"
         if completed:
@@ -1006,6 +1054,35 @@ class GuidanceHost:
             await self._ports.publish_state(self.state_of(session, ended=ended, outcome=outcome))
         except Exception:
             logger.exception("guidance state publish failed")
+
+    async def _pump_frames(self, session: GuidanceSession) -> None:
+        """Push the input camera to a run that asked for frames (``frame_hz``).
+
+        The preview's newest frame is reused when it exists, so a pushed frame
+        and the wearer's overlay are the same pixels; otherwise one is fetched.
+        Always the session's CURRENT input, so a camera change follows at once.
+        """
+
+        period = 1.0 / session.procedure.backend.capabilities.frame_hz
+        last_ts = 0
+        try:
+            while not session.ended:
+                await asyncio.sleep(period)
+                run = session.run
+                if run is None or session.ended:
+                    continue
+                frame = self._ports.latest_frame(session.input_pid)
+                if frame is None or frame.timestamp_us == last_ts:
+                    frame = await self._ports.fetch_frame(session.input_pid)
+                if frame is None or frame.timestamp_us == last_ts or session.ended:
+                    continue
+                last_ts = frame.timestamp_us
+                try:
+                    await run.on_frame(frame)
+                except Exception:
+                    logger.exception("guidance run rejected a frame")
+        except asyncio.CancelledError:
+            pass
 
     async def _heartbeat(self, session: GuidanceSession) -> None:
         try:
