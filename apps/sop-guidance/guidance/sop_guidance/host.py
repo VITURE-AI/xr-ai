@@ -166,6 +166,8 @@ class GuidanceSession:
     turn_history: list[tuple[str, str]] = field(default_factory=list)
     history: list[tuple[str, str]] = field(default_factory=list)
     last_verdict: Mapping[str, Any] = field(default_factory=dict)
+    # The last correction spoken on the current step, until the step is done.
+    correction: dict[str, Any] = field(default_factory=dict)
     last_reminder_us: int = 0
     heartbeat: asyncio.Task[None] | None = None
     frame_pump: asyncio.Task[None] | None = None
@@ -931,12 +933,23 @@ class GuidanceHost:
         if session.ended:
             return
         if isinstance(event, StepChanged):
+            session.correction = {}
             await self._announce(session, event)
         elif isinstance(event, Cue):
+            if event.text.strip() and event.kind == "correction":
+                session.correction = {
+                    "step": session.step_index + 1,
+                    "text": event.text.strip(),
+                    "timestamp_us": _now_us(),
+                }
+                await self._publish(session)
             if event.text.strip():
                 await self.say(session.owner, event.text, kind="correction")
         elif isinstance(event, Verdict):
             session.last_verdict = dict(event.result)
+            if session.last_verdict.get("completed"):
+                # What was wrong has been put right.
+                session.correction = {}
             await self._publish(session)
         elif isinstance(event, OverlayUpdate):
             await self._ports.overlay_update(session.owner, event)
@@ -1056,6 +1069,7 @@ class GuidanceHost:
             "extra": dict(snapshot.extra) if snapshot else {},
             "capabilities": procedure.backend.capabilities.model_dump(mode="json"),
             "wearer_requests": list(session.wearer_requests),
+            "correction": dict(session.correction),
             "updated_us": _now_us(),
         }
 

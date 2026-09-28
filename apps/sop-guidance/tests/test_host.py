@@ -189,3 +189,29 @@ async def test_input_participant_follows_the_selection(harness: HostHarness) -> 
 
     assert host.session_for_input("glasses") is host.session_of("alice")
     assert harness.ports.states[-1]["input_participant"] == "glasses"
+
+
+async def test_a_spoken_correction_stays_in_the_state_until_the_step_is_done(
+    harness: HostHarness,
+) -> None:
+    from sop_guidance.backends.base import Cue, StepChanged, Verdict
+
+    host = harness.host
+    await host.begin("alice", "lid-demo")
+    session = host.session_of("alice")
+    assert harness.ports.states[-1]["correction"] == {}
+
+    await host._on_event(session, Cue("Use the size zero pad.", kind="correction"))
+    correction = harness.ports.states[-1]["correction"]
+    assert (correction["step"], correction["text"]) == (1, "Use the size zero pad.")
+    # A hint is spoken but is not a correction.
+    await host._on_event(session, Cue("Turn it over.", kind="hint"))
+    assert harness.ports.states[-1]["correction"]["text"] == "Use the size zero pad."
+    await host._on_event(session, Verdict({"completed": False}))
+    assert harness.ports.states[-1]["correction"]["text"] == "Use the size zero pad."
+    await host._on_event(session, Verdict({"completed": True}))
+    assert harness.ports.states[-1]["correction"] == {}
+
+    await host._on_event(session, Cue("Wrong pad.", kind="correction"))
+    await host._on_event(session, StepChanged(1, reason="advance"))
+    assert harness.ports.states[-1]["correction"] == {}
