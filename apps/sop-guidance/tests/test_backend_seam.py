@@ -284,3 +284,20 @@ async def test_host_pumps_frames(tmp_path: Path) -> None:
     finally:
         await h.host.shutdown()
         await h.store.aclose()
+
+
+def test_a_request_check_that_denies_the_request_does_not_count() -> None:
+    from sop_guidance.backends.vlm.grading import REQUEST_CHECK_NAME, request_check_present
+
+    def check(evidence: str) -> list[dict]:
+        return [{"requirement": REQUEST_CHECK_NAME, "visible": True, "evidence": evidence}]
+
+    # Seen live, three verdicts running, over a size-one pad after "size zero".
+    for dismissed in ("No specific size was requested.",
+                      "The user did not request a specific size, so any pad satisfies it.",
+                      "The requested size was not specified."):
+        assert not request_check_present(check(dismissed)), dismissed
+    # The prompt's own wording for a request that does not apply still passes.
+    for judged in ("wearer asked for size zero and holds the solid saddle",
+                   "none of their requests bear on what is visible here"):
+        assert request_check_present(check(judged)), judged

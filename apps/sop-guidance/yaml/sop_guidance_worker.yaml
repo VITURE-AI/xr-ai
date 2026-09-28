@@ -36,6 +36,16 @@ preview:
   fps: 30.0
   live_profile: live-coco
 
+# Background scene memory for normal mode: one VLM look at each watched
+# camera every interval_s (paused while that camera is guided or a turn is in
+# flight), condensed into a scene summary every condense_interval_s.
+observer:
+  enabled: true
+  interval_s: 2.0
+  condense_interval_s: 60.0
+  max_observations: 240
+  context_recent: 8
+
 voice:
   silence_duration: 0.8
   min_speech: 0.15

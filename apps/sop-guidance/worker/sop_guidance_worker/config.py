@@ -61,7 +61,13 @@ class ForegroundConfig(_Section):
     llm_role: str = "llm"
     vlm_role: str = "vlm"
     max_tool_rounds: int = Field(default=4, ge=1)
+    idle_history_max: int = Field(default=4, ge=0)
+    """Earlier idle exchanges replayed to the model, per participant."""
+
     max_tokens: int = Field(default=512, ge=16)
+    guidance_turn_max_tokens: int = Field(default=160, ge=16)
+    """Budget for one guidance answer; the old fork's value."""
+
     temperature: float = Field(default=0.2, ge=0.0, le=2.0)
     turn_timeout_s: float = Field(default=10.0, gt=0.0)
     send_frame: bool = True
@@ -84,6 +90,19 @@ class PreviewConfig(_Section):
     """Detector profile drawn outside guidance for clients in ``default`` overlay mode."""
 
     jpeg_debug_fps: float = Field(default=1.0, ge=0.0)
+
+
+class ObserverConfig(_Section):
+    """Background scene memory for normal mode (the old fork's VLM loop)."""
+
+    enabled: bool = True
+    interval_s: float = Field(default=2.0, gt=0.0)
+    """Gap between observations of each watched camera."""
+
+    condense_interval_s: float = Field(default=60.0, gt=0.0)
+    max_observations: int = Field(default=240, ge=1)
+    context_recent: int = Field(default=8, ge=0)
+    """Recent observations shown to the normal-mode model."""
 
 
 class VoiceConfig(_Section):
@@ -122,6 +141,7 @@ class WorkerConfig(_Section):
     wake: WakeSettings = Field(default_factory=WakeSettings)
     foreground: ForegroundConfig = Field(default_factory=ForegroundConfig)
     preview: PreviewConfig = Field(default_factory=PreviewConfig)
+    observer: ObserverConfig = Field(default_factory=ObserverConfig)
     voice: VoiceConfig = Field(default_factory=VoiceConfig)
     api: ApiConfig = Field(default_factory=ApiConfig)
     debug: DebugConfig = Field(default_factory=DebugConfig)
@@ -177,6 +197,7 @@ __all__ = [
     "ApiConfig",
     "DebugConfig",
     "ForegroundConfig",
+    "ObserverConfig",
     "PreviewConfig",
     "VoiceConfig",
     "WakeSettings",

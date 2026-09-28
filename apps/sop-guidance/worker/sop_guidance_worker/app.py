@@ -40,8 +40,9 @@ from .api import create_api
 from .config import WorkerConfig
 from .foreground import Foreground
 from .interaction import Interaction
+from .observer import SceneObserver
 from .preview import FrameCache, PreviewManager
-from .protocol import ClientProtocol, ClientRegistry, WorkerPorts
+from .protocol import MODES_REQUEST_TOPIC, ClientProtocol, ClientRegistry, WorkerPorts
 from .speech import PlaybackTracker, SpeechRouter, runtime_publisher
 
 
@@ -229,6 +230,7 @@ async def run_app(config: WorkerConfig, *, ready_file: Path | None = None) -> No
     preview = PreviewManager(
         endpoint=endpoint, frames=frames, fps=config.preview.fps,
         live_annotator=lambda: live_annotator, recorder=recorder_for,
+        watchers=clients.watchers,
         box_painter=FrameAnnotator(DetectorProfile(enabled=False),
                                    artifacts_dir=config.run_dir / "artifacts" / "overlays" / "backend"),
     )
@@ -244,22 +246,64 @@ async def run_app(config: WorkerConfig, *, ready_file: Path | None = None) -> No
         llm_text=_llm_text(foreground_llm),
     )
     host_ref["host"] = host
+    turns: dict[str, Interaction] = {}
+
+    def watched_cameras() -> set[str]:
+        connected = clients.connected()
+        publishing = set(frames.publishing())
+        return {clients.input_of(pid) for pid in connected} & publishing
+
+    def camera_busy(source: str) -> bool:
+        # Guidance owns the VLM for a guided camera; a turn in flight owns the
+        # model for its answer. The old fork yielded to both.
+        guided = host.session_for_input(source) is not None or host.is_guiding(source)
+        interaction_ = turns.get("interaction")
+        return guided or (interaction_ is not None and interaction_.busy())
+
+    observer = None
+    if config.observer.enabled:
+        observer = SceneObserver(
+            frames=frames, vlm=foreground_vlm, llm=foreground_llm,
+            sources=watched_cameras, busy=camera_busy,
+            interval_s=config.observer.interval_s,
+            condense_interval_s=config.observer.condense_interval_s,
+            max_observations=config.observer.max_observations,
+        )
     foreground = Foreground(
         host=host, llm=foreground_llm, vlm=foreground_vlm, config=config,
         speech=speech, frames=frames, input_of=clients.input_of,
+        scene=(lambda source: observer.memory(source).context_block(config.observer.context_recent))
+        if observer is not None else None,
     )
     interaction = Interaction(
         host=host, foreground=foreground, speech=speech, clients=clients,
         endpoint=endpoint, llm=foreground_llm, config=config,
     )
+    turns["interaction"] = interaction
     protocol = ClientProtocol(
         host=host, clients=clients, speech=speech, preview=preview,
         on_typed=interaction.on_typed, cancel_turn=interaction.cancel,
     )
     endpoint.on_data(protocol.on_data)
 
+    mode_requests: set[asyncio.Task[None]] = set()
+
+    async def request_modes(pid: str) -> None:
+        # A client's overlay, wake and input choices live in the client, so
+        # after a worker restart they are gone until it sends them again. The
+        # first message can race the client's own subscription, hence the
+        # repeat; announcing is idempotent.
+        for delay in (0.0, 2.0):
+            await asyncio.sleep(delay)
+            if pid not in endpoint.connected_participants:
+                return
+            await speech.send(pid, MODES_REQUEST_TOPIC, "{}")
+
     async def joined(pid: str) -> None:
         logger.info("participant joined {}", pid)
+        task = asyncio.create_task(request_modes(pid), name=f"modes-request:{pid}")
+        mode_requests.add(task)
+        task.add_done_callback(mode_requests.discard)
 
     async def left(pid: str) -> None:
         logger.info("participant left {}", pid)
@@ -268,6 +312,9 @@ async def run_app(config: WorkerConfig, *, ready_file: Path | None = None) -> No
         await preview.stop(pid)
         frames.release(pid)
         clients.forget(pid)
+        foreground.forget(pid)
+        if observer is not None:
+            observer.forget(pid)
 
     voice = VoiceAgent(
         query_topic=USER_QUERY_TOPIC,
@@ -304,9 +351,13 @@ async def run_app(config: WorkerConfig, *, ready_file: Path | None = None) -> No
                 len(procedures), config.api.host, config.api.port)
     try:
         async with runtime:
+            if observer is not None:
+                observer.start()
             try:
                 await voice.run(runtime)
             finally:
+                if observer is not None:
+                    await observer.aclose()
                 await interaction.aclose()
                 await host.shutdown()
                 await preview.aclose()

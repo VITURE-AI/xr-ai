@@ -108,7 +108,6 @@ def test_shipped_configuration_loads() -> None:
     assert spec.backend == "vlm"
     assert spec.backend_config["detector"]["profile"] == "nosepad-v5"
     assert spec.backend_config["monitor"]["check_interval_s"] == 1.0
-    assert entries[0].active_prompt()
     assert config.prompt("active") and config.prompt("idle") and config.prompt("current_view")
 
 

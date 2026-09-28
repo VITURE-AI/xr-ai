@@ -188,6 +188,11 @@ class Interaction:
             task.add_done_callback(lambda t, p=pid: self._tasks.pop(p, None)
                                    if self._tasks.get(p) is t else None)
 
+    def busy(self) -> bool:
+        """Whether any participant's turn is in flight."""
+
+        return any(not task.done() for task in self._tasks.values())
+
     async def cancel(self, pid: str) -> None:
         task = self._tasks.pop(pid, None)
         if task is None or task.done() or task is asyncio.current_task():
@@ -243,6 +248,10 @@ class Interaction:
                 # A bare "resume", as the stop message invites: the speaker's
                 # last stopped session, whichever procedure it was.
                 procedure = host.resumable_procedure(pid)
+            elif len(host.procedures()) == 1:
+                # "Guide me through it" names nothing, but with one procedure
+                # there is nothing else it can mean.
+                procedure = host.procedures()[0]
             else:
                 procedure = None
             if procedure is not None:

@@ -130,6 +130,16 @@ _REQUEST_CHECK_MARKERS = ("wearer asked", "asked for", "requested", "wearer's re
 # withholds the advance SILENTLY instead of speaking a correction nobody can act
 # on.
 REQUEST_CHECK_MISSING = f"missing requirement: {REQUEST_CHECK_NAME}"
+# Evidence on the request check that denies a request was made. The check is
+# only asked for when there is one, so this is the grader not reading it.
+# Deliberately narrow: "none of their requests bear on this step" is the
+# prompt's own wording for a request that does not apply and must still pass.
+_REQUEST_DISMISSED = re.compile(
+    r"\b(?:no|not|none|never)\b(?:\s+\w+){0,3}?\s+(?:was\s+|were\s+)?(?:requested|specified|asked\s+for)\b"
+    r"|\b(?:did\s+not|didn't|never|has\s+not|hasn't)\s+(?:request|ask|specif)"
+    r"|\bno\s+(?:particular\s+|specific\s+)?preference\b",
+    re.IGNORECASE,
+)
 
 
 def request_check_present(checks: Sequence[dict[str, Any]]) -> bool:
@@ -146,6 +156,13 @@ def request_check_present(checks: Sequence[dict[str, Any]]) -> bool:
     for check in checks:
         name = str(check.get("requirement", "")).lower()
         if any(marker in name for marker in _REQUEST_CHECK_MARKERS):
+            evidence = str(check.get("evidence", "")).lower()
+            if _REQUEST_DISMISSED.search(evidence):
+                # The check is there but denies the request exists, which is
+                # false whenever this gate runs: observed live as "no specific
+                # size requested" over a size-one pad, with "size zero" listed
+                # as the most recent request, three verdicts running.
+                return False
             return True
     return False
 

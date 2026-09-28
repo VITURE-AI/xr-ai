@@ -25,7 +25,8 @@ flowchart TD
     subgraph W[sop_guidance_worker]
         V[VoiceAgent: STT, voice gate, TTS]
         I[Interaction: wake word, fast paths]
-        F[Foreground: idle / active tool loop]
+        F[Foreground: idle tool loop / guidance turn]
+        O[Scene observer: VLM every 2 s]
         G[Guidance host: sessions, takeover, resume]
         B[Procedure backend: vlm, remote, ...]
         P[Preview: detector overlay, frame cache]
@@ -39,17 +40,25 @@ flowchart TD
     F -->|guidance__* tools| G
     G <--> B
     H -->|camera| P --> B
+    H -->|camera| O -->|scene memory| F
     P -->|xr-hub-overlay-pid| H
     B -->|step, cue, verdict| G --> S --> V
     G --> R
     A -->|procedures, sessions, frames| C
 ```
 
-- **Tools, not keywords.** Outside guidance the foreground offers
-  `guidance__list_procedures`, `guidance__start` and `guidance__status`; the
-  `procedure_id` argument is an exact enum of the enabled procedure folders, so
-  the model cannot invent one. During guidance it adds stop, advance, repeat,
-  check-now and switch.
+- **Tools outside guidance, one JSON turn inside it.** Outside guidance the
+  foreground offers `current_view`, `guidance__list_procedures`,
+  `guidance__start` and `guidance__status`; the `procedure_id` argument is an
+  exact enum of the enabled procedure folders, so the model cannot invent one.
+  During guidance each question is one model call that returns a spoken reply
+  and an action (none, advance, restep, check, exit, switch, navigate), which
+  code applies. Both prompts are the old fork's.
+- **Scene memory.** Outside guidance a background observer asks the VLM what
+  changed on each watched camera every 2 s and condenses that into a scene
+  summary every minute, so the assistant can answer "what did I just do?".
+  It pauses while that camera is guided or a turn is in flight (`observer:` in
+  the worker yaml; `enabled: false` turns it off).
 - **Backends decide completion.** A procedure names a backend. `vlm` grades a
   fresh frame against the step's teacher reference frames (at least two passes
   in a row plus a hold), with an optional detector overlay and a geometry
@@ -68,7 +77,7 @@ flowchart TD
 
 | File | What it holds |
 |---|---|
-| `yaml/sop_guidance_worker.yaml` | Models file, wake word, foreground, preview, voice, app API, recording, and the `guidance_defaults` every procedure inherits |
+| `yaml/sop_guidance_worker.yaml` | Models file, wake word, foreground, preview, scene observer, voice, app API, recording, and the `guidance_defaults` every procedure inherits |
 | `procedures/<id>/procedure.yaml` | One procedure: title, aliases, backend, and overrides of `guidance_defaults` |
 | `procedures/<id>/sop.json`, `frames/` | Its steps and teacher reference frames |
 | `yaml/detectors.yaml` | Named detector profiles (weights under `detectors/`, in Git LFS) |
@@ -111,6 +120,12 @@ cd docker
 cp .env.example .env   # set DASHSCOPE_API_KEY
 docker compose -f compose.yaml -f compose.cpu.yaml up -d --build
 ```
+
+Builds run on the host network and use the mirrors set in `docker/.env`
+(`APT_MIRROR_HOST`, `PIP_INDEX_URL`, `TORCH_INDEX_URL`; see `.env.example`),
+which matter where PyPI and download.pytorch.org are slow. The worker image
+bakes in NLTK's `punkt_tab`, which the voice pipeline would otherwise fetch
+from GitHub at startup.
 
 ## Clients
 

@@ -11,9 +11,6 @@ aliases: [nose pad replacement, nosepad, nose pad, replace the nose pad]
 description: Remove and replace the magnetic nose pad on Luma Ultra XR glasses.
 backend: vlm
 
-foreground:
-  active_prompt_file: prompts/active.txt
-
 # Words that tell the interchangeable pads apart. Two spoken requests that
 # differ only in these ("the solid one" / "the wire one") are one choice
 # revised, so the newer replaces the older.

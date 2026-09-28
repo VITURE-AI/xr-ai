@@ -7,8 +7,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 from collections.abc import Sequence
 from pathlib import Path
+
+from loguru import logger
 
 from .app import run_app
 from .config import load_config
@@ -26,6 +29,12 @@ def run(argv: Sequence[str] | None = None) -> None:
             ready_file=args.ready_file,
         )
     )
+    # Exit now rather than wait on worker threads at interpreter shutdown: a
+    # library thread stuck in a network call (NLTK's data download, observed)
+    # kept the process alive after the voice session ended, so a supervisor
+    # never restarted a worker that had stopped serving.
+    logger.complete()
+    os._exit(0)
 
 
 if __name__ == "__main__":

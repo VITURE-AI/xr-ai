@@ -469,3 +469,13 @@ async def test_backend_overlay_reaches_clients_and_the_preview() -> None:
     owner, topic, payload = sent[0]
     assert (owner, topic) == ("alice", "guidance.overlay")
     assert payload["detections"][0]["label"] == "lid"  # type: ignore[index]
+
+
+async def test_pronoun_entry_starts_the_only_procedure(harness: HostHarness) -> None:
+    interaction, foreground, _, _, _ = _interaction(harness)
+
+    await interaction.on_speech("alice", "Hey Helix, guide me through that procedure.", 1)
+    await _drain(interaction)
+
+    assert foreground.asked == []
+    assert harness.host.session_of("alice") is not None

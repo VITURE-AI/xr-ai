@@ -630,6 +630,17 @@ class GuidanceHost:
 
         return self._latest_resumable(pid)[0]
 
+    def last_finished(self, pid: str) -> tuple[LoadedProcedure, int, int, bool] | None:
+        """``(procedure, stopped step index, ended at us, completed)`` of *pid*'s last run."""
+
+        finished = self._finished.get(pid)
+        if finished is None:
+            return None
+        procedure = self._procedures.get(finished.procedure_id)
+        if procedure is None:
+            return None
+        return procedure, finished.step_index, finished.at_us, finished.completed
+
     def resumable_procedure(self, pid: str) -> LoadedProcedure | None:
         """The procedure of :meth:`latest_resumable`'s session, if any."""
 

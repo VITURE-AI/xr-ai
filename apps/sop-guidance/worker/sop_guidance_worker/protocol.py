@@ -39,6 +39,8 @@ CONTROL_TOPIC = "guidance.control"
 RESULT_TOPIC = "guidance.result"
 STATE_TOPIC = "guidance.state"
 OVERLAY_TOPIC = "guidance.overlay"
+MODES_REQUEST_TOPIC = "xr.modes_request"
+"""Worker to client: re-send your ``xr.*`` modes (they live in the client)."""
 
 YOLO_MODES = frozenset({"default", "guidance_only"})
 
@@ -94,6 +96,17 @@ class ClientRegistry:
             return self._wake_default
         return state.wake_in_live
 
+    def watchers(self, source: str) -> set[str]:
+        """Connected clients showing *source*'s camera that asked for an overlay.
+
+        A client that never announced an overlay mode (a wearer's glasses) is
+        not sent return video at all.
+        """
+
+        return {pid for pid in self.connected()
+                if (state := self._clients.get(pid)) is not None
+                and state.yolo_mode is not None and self.input_of(pid) == source}
+
     def wants_live_preview(self, pid: str) -> bool:
         state = self._clients.get(pid)
         return state is not None and state.yolo_mode == "default"
@@ -140,9 +153,13 @@ class WorkerPorts:
             await self._preview.start_guidance(owner, input_pid, backend.preview_annotator())
 
     async def stop_preview(self, owner: str) -> None:
+        loop = self._preview.running(owner)
+        viewers = self._preview.audience(loop) if loop is not None else {owner}
         await self._preview.stop(owner)
-        if self._clients.wants_live_preview(owner) and owner in self._clients.connected():
-            await self._preview.start_live(owner, self._clients.input_of(owner))
+        connected = self._clients.connected()
+        for pid in sorted(viewers | {owner}):
+            if self._clients.wants_live_preview(pid) and pid in connected:
+                await self._preview.start_live(pid, self._clients.input_of(pid))
 
     async def overlay_update(self, owner: str, update: OverlayUpdate) -> None:
         self._preview.set_overlay(owner, update)
@@ -326,6 +343,7 @@ class ClientProtocol:
 __all__ = [
     "CONTROL_TOPIC",
     "MAIN_INPUT_TOPIC",
+    "MODES_REQUEST_TOPIC",
     "OVERLAY_TOPIC",
     "RESULT_TOPIC",
     "STATE_TOPIC",

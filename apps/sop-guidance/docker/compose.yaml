@@ -15,6 +15,9 @@
 
 name: sop-guidance
 
+# Builds use the host network too: on a host whose only resolver is the
+# systemd-resolved stub, bridge-network build containers fall back to public
+# DNS, which can be slow or unreachable.
 x-build-args: &build-args
   APT_MIRROR_HOST: ${APT_MIRROR_HOST:-deb.debian.org}
   PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
@@ -34,6 +37,7 @@ services:
       context: ../../..
       dockerfile: apps/sop-guidance/docker/hub.Dockerfile
       args: *build-args
+      network: host
     image: sop-guidance-hub
     restart: unless-stopped
     network_mode: host
@@ -53,6 +57,7 @@ services:
       context: ../../..
       dockerfile: apps/sop-guidance/docker/speech.Dockerfile
       args: *build-args
+      network: host
     image: sop-guidance-speech
     restart: unless-stopped
     network_mode: host
@@ -70,6 +75,7 @@ services:
       context: ../../..
       dockerfile: apps/sop-guidance/docker/worker.Dockerfile
       args: *build-args
+      network: host
     image: sop-guidance-worker
     restart: unless-stopped
     network_mode: host

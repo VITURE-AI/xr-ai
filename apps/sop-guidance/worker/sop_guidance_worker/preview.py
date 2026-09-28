@@ -153,6 +153,7 @@ class PreviewManager:
         live_annotator: Callable[[], FrameAnnotator | None],
         recorder: Callable[[str], SessionHandle | None],
         box_painter: FrameAnnotator | None = None,
+        watchers: Callable[[str], set[str]] | None = None,
     ) -> None:
         self._ep = endpoint
         self._frames = frames
@@ -163,10 +164,32 @@ class PreviewManager:
         # detector is never run.
         self._box_painter = box_painter
         self._loops: dict[str, _Loop] = {}
+        # Clients watching a camera: they see the guidance preview of that
+        # camera, not only the session owner. Speech from the wearer's own
+        # device makes the wearer the owner, while the operator's browser
+        # watching that camera is who needs the task detector's boxes.
+        self._watchers = watchers or (lambda _source: set())
         self._overlays: dict[str, tuple[float, OverlayUpdate]] = {}
 
     def running(self, recipient: str) -> _Loop | None:
         return self._loops.get(recipient)
+
+    def guidance_for(self, source: str) -> _Loop | None:
+        """The guidance preview running on *source*'s camera, if any."""
+
+        for loop in self._loops.values():
+            if loop.guidance and loop.source == source:
+                return loop
+        return None
+
+    def audience(self, loop: _Loop) -> set[str]:
+        """Who a loop's frames go to: its recipient, plus watchers of a guided camera."""
+
+        if not loop.guidance:
+            return {loop.recipient}
+        others = {w for w in self._watchers(loop.source) if w != loop.recipient
+                  and not ((own := self._loops.get(w)) is not None and own.guidance)}
+        return {loop.recipient} | others
 
     async def start_guidance(self, recipient: str, source: str,
                              annotator: FrameAnnotator | None,
@@ -182,6 +205,10 @@ class PreviewManager:
             return
         self._start(recipient, source, None if backend_boxes else annotator,
                     guidance=True, backend_boxes=backend_boxes)
+        # Watchers' own live loops would draw the general detector over the
+        # same track; the guidance loop serves them now.
+        for watcher in self._watchers(source):
+            await self.stop_live(watcher)
 
     def set_overlay(self, recipient: str, update: OverlayUpdate) -> None:
         """The boxes a backend wants on *recipient*'s preview from now on."""
@@ -195,6 +222,10 @@ class PreviewManager:
         if current is not None and (current.guidance or current.source == source):
             return
         await self.stop(recipient)
+        if self.guidance_for(source) is not None:
+            # That camera is being guided; its guidance preview reaches this
+            # client as a watcher.
+            return
         annotator = self._live_annotator()
         if self._fps <= 0 or annotator is None:
             return
@@ -209,11 +240,13 @@ class PreviewManager:
         loop = self._loops.pop(recipient, None)
         if loop is None:
             return
+        audience = self.audience(loop)
         loop.task.cancel()
         await asyncio.gather(loop.task, return_exceptions=True)
         self._overlays.pop(recipient, None)
-        with suppress(Exception):
-            await self._ep.stop_return_video(recipient)
+        for pid in audience:
+            with suppress(Exception):
+                await self._ep.stop_return_video(pid)
 
     async def aclose(self) -> None:
         for recipient in list(self._loops):
@@ -290,14 +323,17 @@ class PreviewManager:
                                 await asyncio.to_thread(bgr_to_jpeg, drawn), data.pts_us,
                             )
                     height, width = drawn.shape[:2]
-                    await self._ep.send_return_video(ReturnVideoFrame(
-                        pts_us=data.pts_us,
-                        width=width,
-                        height=height,
-                        fmt=PixelFormat.RGB24,
-                        data=await asyncio.to_thread(bgr_to_rgb24, drawn),
-                        participant_id=recipient,
-                    ))
+                    pixels = await asyncio.to_thread(bgr_to_rgb24, drawn)
+                    loop = self._loops.get(recipient)
+                    for pid in sorted(self.audience(loop) if loop else {recipient}):
+                        await self._ep.send_return_video(ReturnVideoFrame(
+                            pts_us=data.pts_us,
+                            width=width,
+                            height=height,
+                            fmt=PixelFormat.RGB24,
+                            data=pixels,
+                            participant_id=pid,
+                        ))
                     failures = 0
                 except asyncio.CancelledError:
                     raise
