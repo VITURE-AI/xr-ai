@@ -179,6 +179,34 @@ def load_detector_profiles(path: Path) -> dict[str, DetectorProfile]:
     return profiles
 
 
+_LFS_POINTER_PREFIX = b"version https://git-lfs"
+
+
+def weight_problems(profile: DetectorProfile) -> list[str]:
+    """Why *profile*'s weights cannot load: missing, or still git-lfs pointer files.
+
+    For a backend's ``validate``: a pointer file only fails deep in the loader,
+    as an unsupported format, on the first guided frame.
+    """
+    paths = [Path(profile.model)] if profile.model else []
+    if profile.hands.enabled and profile.hands.model:
+        paths.append(Path(profile.hands.model))
+    problems: list[str] = []
+    for path in paths:
+        candidates = ([path] if path.is_file()
+                      else sorted(path.glob("*.bin")) if path.is_dir() else [])
+        if not candidates:
+            problems.append(f"detector weights {path} do not exist")
+            continue
+        for candidate in candidates:
+            with candidate.open("rb") as stream:
+                if stream.read(len(_LFS_POINTER_PREFIX)) == _LFS_POINTER_PREFIX:
+                    problems.append(
+                        f"detector weights {candidate} are a git-lfs pointer; run git lfs pull")
+                    break
+    return problems
+
+
 @dataclass(frozen=True)
 class Detection:
     """One detector box, in source-image pixel coordinates."""
@@ -444,6 +472,16 @@ class FrameAnnotator:
             logger.exception("GUIDANCE_YOLO  role={}  source={}  error={}", role, path, exc)
             return OverlayArtifact(path=path, applied=False, error=str(exc))
 
+    async def detect_array(self, image: np.ndarray) -> list[Detection]:
+        """Every box in an in-memory BGR frame, drawing nothing; runs off the event loop.
+
+        For a backend that judges the boxes itself and has them drawn elsewhere.
+        No geometry plugin sees them. A disabled profile finds nothing.
+        """
+        if not self._profile.enabled:
+            return []
+        return await asyncio.to_thread(self._detect_array_sync, image)
+
     def write_png(self, image: np.ndarray, stem: str) -> str:
         """Encode one already-annotated frame into ``artifacts_dir``; returns its path."""
         import cv2
@@ -574,6 +612,12 @@ class FrameAnnotator:
             spatial_context=self.geometry.describe(geometry) if self.spatial_context else "",
             geometry=geometry,
         )
+
+    def _detect_array_sync(self, image: np.ndarray) -> list[Detection]:
+        with self._lock:
+            model, _cv2 = self._load()
+            drawn = self._detect_yolo(model, image) + self._detect_hands(image)
+        return [detection for detection, _ in drawn]
 
     def _annotate_file_sync(self, image_path: str, role: str, stream: str = "") -> OverlayArtifact:
         with self._lock:

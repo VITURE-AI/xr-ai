@@ -82,6 +82,60 @@ profiles:
       color_rgb: "#F4A6B5"
       replaces_class: hand      # suppressed from the task pass; "" keeps both
 
+  # ── Raspberry Pi M.2 HAT+ assembly: the rpi_hat_judge backend ───────────
+  # Read by the judge, not by a VLM: these boxes decide the step. The judge
+  # sends them back as an overlay, and the preview paints them in these
+  # colours without running this detector a second time.
+  rpi-hat-v7:
+    enabled: true
+    required: true
+    preheat: true
+    # v7 (delivered 2026-08-19), one weight for top-down and glasses views.
+    # Test mAP50 0.995 over all classes, no hole/hole_filled confusion on 1140
+    # holes. INT8 OpenVINO IR, about 300 ms a frame on CPU at 1280.
+    model: ../detectors/rpi-hat-v7-int8mix_openvino_model
+    # MUST be 1280: v7 was trained there and holes are small targets; 960
+    # loses them.
+    imgsz: 1280
+    device: intel:cpu
+    conf: 0.40
+    iou: 0.70
+    overlay:
+      boxes: true
+      line_width_px: 2
+      labels: true
+      confidence_text: false
+      # Keys are the checkpoint's classes and the values are the names the
+      # judge matches on: keep them identical.
+      class_labels:
+        board: board
+        hole: hole
+        screw: screw
+        hole_filled: hole_filled
+        fpc: fpc
+      # The old judge's palette: green board, amber empty hole, sky-blue
+      # screw, red filled hole, gold cable.
+      class_colors_rgb:
+        board: "#3CDC50"
+        hole: "#FFB020"
+        screw: "#2EC8FF"
+        hole_filled: "#E63C3C"
+        fpc: "#FFD700"
+    # The shared hand detector feeds the occlusion gate (a hand over the board
+    # voids the frame). It replaces the old judge's MediaPipe landmarks; the
+    # task checkpoint has no hand class of its own to supersede.
+    hands:
+      enabled: true
+      model: ../detectors/hand/hand_yolov8n.pt
+      conf: 0.40
+      iou: 0.70
+      imgsz: 640
+      device: cpu
+      source_class: hand
+      label: hand
+      color_rgb: "#E040C8"
+      replaces_class: ""
+
   # ── live preview: general-purpose COCO detector ──────────────────────────
   # Decoration for an idle stream, not evidence: its boxes never reach a VLM
   # prompt or a geometry plugin.

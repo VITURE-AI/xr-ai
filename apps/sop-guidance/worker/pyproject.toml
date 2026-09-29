@@ -16,6 +16,10 @@ dependencies = [
     "xr-ai-logging",
     "xr-ai-models",
     "xr-ai-sop-guidance[vision,recorder]",
+    # Procedure backends beyond the built-in vlm one. Each is its own package,
+    # found by its `sop_guidance.backends` entry point; listing it here is all
+    # it takes to make its procedures runnable.
+    "sop-guidance-rpi-hat-judge",
     "xr-ai-tools",
     "xr-ai-voice",
     "xr-ai-voicegate",
@@ -43,6 +47,7 @@ xr-ai-hub-client = { path = "../../../agent-sdk/xr-ai-hub", editable = true }
 xr-ai-logging   = { path = "../../../utils/xr-ai-logging", editable = true }
 xr-ai-models    = { path = "../../../agent-sdk/xr-ai-models", editable = true }
 xr-ai-sop-guidance = { path = "../guidance", editable = true }
+sop-guidance-rpi-hat-judge = { path = "../backends/rpi-hat-judge", editable = true }
 xr-ai-tools     = { path = "../../../agent-sdk/xr-ai-tools", editable = true }
 xr-ai-voice     = { path = "../../../agent-sdk/xr-ai-voice", editable = true }
 xr-ai-voicegate = { path = "../../../utils/xr-ai-voicegate", editable = true }

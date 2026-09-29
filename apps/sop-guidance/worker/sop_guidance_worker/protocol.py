@@ -148,7 +148,8 @@ class WorkerPorts:
 
     async def start_preview(self, owner: str, input_pid: str, backend: ProcedureBackend) -> None:
         if backend.capabilities.provides_overlay:
-            await self._preview.start_guidance(owner, input_pid, None, backend_boxes=True)
+            await self._preview.start_guidance(owner, input_pid, backend.preview_annotator(),
+                                               backend_boxes=True)
         else:
             await self._preview.start_guidance(owner, input_pid, backend.preview_annotator())
 

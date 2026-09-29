@@ -746,6 +746,11 @@ class GuidanceHost:
         completed = outcome == "completed"
         if completed:
             message = f"You've completed all steps in '{procedure.title}'. Well done!"
+        elif not procedure.backend.capabilities.resume:
+            message = (
+                f"Stopped guidance for '{procedure.title}' at step {stopped_at + 1} "
+                f"of {procedure.total_steps}. Say guide me through it to start again."
+            )
         else:
             # Naming the step makes the resume offer actionable: congratulating
             # someone who stopped at step 2 of 5 tells them we lost track.
@@ -970,8 +975,8 @@ class GuidanceHost:
         procedure = session.procedure
         total = procedure.total_steps
         instruction = procedure.instruction(event.index)
-        lead = ""
-        if event.acknowledge and event.index > 0:
+        lead = event.lead.strip()
+        if not lead and event.acknowledge and event.index > 0:
             lead = await self._step_ack(session, procedure.instruction(event.index - 1))
         # The turn history is the conversation about one step; a new step
         # starts a new one.
@@ -1097,9 +1102,19 @@ class GuidanceHost:
 
         period = 1.0 / session.procedure.backend.capabilities.frame_hz
         last_ts = 0
+        # Paced against a moving deadline: sleeping a full period after a slow
+        # on_frame would add its whole duration to every cycle, and a 300 ms
+        # detector at 3 Hz would run at 1.6.
+        next_tick = time.monotonic()
         try:
             while not session.ended:
-                await asyncio.sleep(period)
+                next_tick += period
+                delay = next_tick - time.monotonic()
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                else:
+                    next_tick = time.monotonic()
+                    await asyncio.sleep(0)
                 run = session.run
                 if run is None or session.ended:
                     continue

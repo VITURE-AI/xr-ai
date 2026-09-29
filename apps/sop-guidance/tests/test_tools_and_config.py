@@ -103,11 +103,15 @@ def test_shipped_configuration_loads() -> None:
     config = load_config(APP / "yaml" / "sop_guidance_worker.yaml")
     entries = discover_procedures(config.procedures_dir, config.guidance_defaults)
 
-    assert [e.id for e in entries] == ["nosepad-replacement"]
+    assert [e.id for e in entries] == ["nosepad-replacement", "rpi-hat-assembly"]
     spec = entries[0].spec
     assert spec.backend == "vlm"
     assert spec.backend_config["detector"]["profile"] == "nosepad-v5"
     assert spec.backend_config["monitor"]["check_interval_s"] == 1.0
+    judge = entries[1].spec
+    assert judge.backend == "rpi_hat_judge"
+    # The vlm defaults are layered only onto vlm procedures.
+    assert "monitor" not in judge.backend_config
     assert config.prompt("active") and config.prompt("idle") and config.prompt("current_view")
 
 
@@ -119,6 +123,18 @@ def test_shipped_procedure_builds_its_backend() -> None:
     entry = discover_procedures(config.procedures_dir, config.guidance_defaults)[0]
     VlmBackendConfig.model_validate(entry.spec.backend_config)
     assert callable(resolve_backend("vlm"))
+
+
+def test_the_judge_procedure_resolves_its_installed_backend() -> None:
+    from rpi_hat_judge.config import RpiHatJudgeConfig
+    from sop_guidance.backends.registry import available_backends, resolve_backend
+
+    config = load_config(APP / "yaml" / "sop_guidance_worker.yaml")
+    entry = discover_procedures(config.procedures_dir, config.guidance_defaults)[1]
+    assert "rpi_hat_judge" in available_backends()
+    assert callable(resolve_backend(entry.spec.backend))
+    settings = RpiHatJudgeConfig.model_validate(entry.spec.backend_config)
+    assert (settings.detector.profile, settings.tick_hz) == ("rpi-hat-v7", 3.0)
 
 
 def test_spoken_step_jumps_are_entry_requests() -> None:

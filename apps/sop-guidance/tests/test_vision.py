@@ -625,6 +625,12 @@ def test_load_detector_profiles_resolves_paths():
     assert Path(live.model) == detectors / "yolo26s-int8_openvino_model"
     assert (live.imgsz, live.conf, live.required, live.hands.enabled) == (640, 0.40, False, False)
     assert live.overlay.confidence_text and live.overlay.class_labels == {}
+    judge = profiles["rpi-hat-v7"]
+    assert Path(judge.model) == detectors / "rpi-hat-v7-int8mix_openvino_model"
+    # v7 was trained at 1280 and the holes are small; nothing smaller will do.
+    assert (judge.imgsz, judge.conf, judge.device) == (1280, 0.40, "intel:cpu")
+    assert set(judge.overlay.class_labels) == {"board", "hole", "screw", "hole_filled", "fpc"}
+    assert judge.hands.enabled and judge.hands.replaces_class == ""
 
     for profile in profiles.values():
         assert Path(profile.model).is_dir(), f"missing weights: {profile.model}"

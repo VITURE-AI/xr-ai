@@ -197,14 +197,16 @@ class PreviewManager:
         """Preview *source* for *recipient* during guidance.
 
         With ``backend_boxes`` the frames carry the boxes the backend last sent
-        through :meth:`set_overlay` instead of *annotator*'s detections.
+        through :meth:`set_overlay` instead of *annotator*'s detections, and
+        *annotator*, when given, only paints them in its profile's colours.
         """
 
         await self.stop(recipient)
         if self._fps <= 0:
             return
         self._start(recipient, source, None if backend_boxes else annotator,
-                    guidance=True, backend_boxes=backend_boxes)
+                    guidance=True, backend_boxes=backend_boxes,
+                    painter=annotator if backend_boxes else None)
         # Watchers' own live loops would draw the general detector over the
         # same track; the guidance loop serves them now.
         for watcher in self._watchers(source):
@@ -253,10 +255,11 @@ class PreviewManager:
             await self.stop(recipient)
 
     def _start(self, recipient: str, source: str, annotator: FrameAnnotator | None,
-               *, guidance: bool, backend_boxes: bool = False) -> None:
+               *, guidance: bool, backend_boxes: bool = False,
+               painter: FrameAnnotator | None = None) -> None:
         task = asyncio.create_task(
             self._run(recipient, source, annotator, guidance=guidance,
-                      backend_boxes=backend_boxes),
+                      backend_boxes=backend_boxes, painter=painter),
             name=f"preview:{recipient}",
         )
         self._loops[recipient] = _Loop(recipient, source, guidance, task, backend_boxes)
@@ -268,7 +271,9 @@ class PreviewManager:
         return entry[1]
 
     async def _run(self, recipient: str, source: str, annotator: FrameAnnotator | None,
-                   *, guidance: bool, backend_boxes: bool = False) -> None:
+                   *, guidance: bool, backend_boxes: bool = False,
+                   painter: FrameAnnotator | None = None) -> None:
+        painter = painter or self._box_painter
         period = 1.0 / self._fps
         last_pts = 0
         failures = 0
@@ -307,10 +312,10 @@ class PreviewManager:
                         # untouched for anything that needs them unannotated.
                         annotated = await annotator.annotate_array(image.copy(), stream=source)
                         drawn = annotated.image
-                    elif backend_boxes and self._box_painter is not None:
+                    elif backend_boxes and painter is not None:
                         update = self._backend_boxes(recipient)
                         if update is not None and update.detections:
-                            drawn = self._box_painter.draw(image.copy(), list(update.detections))
+                            drawn = painter.draw(image.copy(), list(update.detections))
                     if guidance:
                         self._frames.store(TimedFrame(
                             participant_id=source, timestamp_us=data.pts_us,

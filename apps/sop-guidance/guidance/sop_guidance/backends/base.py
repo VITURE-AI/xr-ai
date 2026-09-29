@@ -111,6 +111,10 @@ class StepChanged:
     acknowledge: bool = False
     """Lead the announcement with a short acknowledgement of the finished step."""
 
+    lead: str = ""
+    """The backend's own words before the announcement, such as confirming the
+    finished step; used instead of the host's acknowledgement when set."""
+
 
 @dataclass(frozen=True, slots=True)
 class Cue:
@@ -290,8 +294,9 @@ class ProcedureBackend(Protocol):
     def preview_annotator(self) -> Any:
         """The frame annotator the host preview draws with, or None.
 
-        Ignored when ``capabilities.provides_overlay`` is set: the backend then
-        sends its own boxes as :class:`OverlayUpdate` events.
+        When ``capabilities.provides_overlay`` is set the backend sends its own
+        boxes as :class:`OverlayUpdate` events, and this annotator only paints
+        them in its profile's colours; its detector is never run.
         """
 
     async def open_run(

@@ -1,0 +1,28 @@
+description: Ultralytics YOLO26m model trained on /root/autodl-tmp/rpi_train_v3/rpi_v3.yaml
+author: Ultralytics
+date: '2026-08-26T15:44:22.598645+08:00'
+version: 8.4.129
+license: AGPL-3.0 License (https://ultralytics.com/license)
+docs: https://docs.ultralytics.com
+stride: 32
+task: detect
+head: Detect
+batch: 1
+imgsz:
+- 1280
+- 1280
+names:
+  0: board
+  1: hole
+  2: screw
+  3: hole_filled
+  4: fpc
+args:
+  data: calib_ov/calib.yaml
+  batch: 1
+  fraction: 1.0
+  quantize: 8
+  dynamic: false
+  nms: false
+channels: 3
+end2end: true

@@ -43,9 +43,13 @@ COPY --chown=appuser:appuser utils /workspace/utils
 # Dependencies first so code edits do not reinstall torch.
 COPY --chown=appuser:appuser apps/sop-guidance/guidance/pyproject.toml /workspace/apps/sop-guidance/guidance/
 COPY --chown=appuser:appuser apps/sop-guidance/worker/pyproject.toml /workspace/apps/sop-guidance/worker/
+COPY --chown=appuser:appuser apps/sop-guidance/backends/rpi-hat-judge/pyproject.toml \
+     /workspace/apps/sop-guidance/backends/rpi-hat-judge/
 RUN mkdir -p apps/sop-guidance/guidance/sop_guidance apps/sop-guidance/worker/sop_guidance_worker \
+             apps/sop-guidance/backends/rpi-hat-judge/rpi_hat_judge \
     && touch apps/sop-guidance/guidance/sop_guidance/__init__.py \
-             apps/sop-guidance/worker/sop_guidance_worker/__init__.py
+             apps/sop-guidance/worker/sop_guidance_worker/__init__.py \
+             apps/sop-guidance/backends/rpi-hat-judge/rpi_hat_judge/__init__.py
 RUN --mount=type=cache,target=/tmp/uv-cache,uid=1000,gid=1000 \
     uv sync --project apps/sop-guidance/worker --no-dev
 

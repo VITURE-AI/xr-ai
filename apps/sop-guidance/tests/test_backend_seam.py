@@ -259,6 +259,7 @@ def test_bad_remote_config_names_the_file(tmp_path: Path) -> None:
 def test_every_event_survives_the_wire() -> None:
     events = [
         StepChanged(2, reason="navigate", acknowledge=True),
+        StepChanged(1, reason="advance", lead="Step 1, done."),
         Cue("Turn it over.", kind="hint", priority=3),
         Verdict({"completed": True, "checks": [{"requirement": "lid", "visible": True}]}),
         OverlayUpdate(123, (LID_BOX,), extra={"holes": [1, 0]}),

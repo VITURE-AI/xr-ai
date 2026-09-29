@@ -120,7 +120,7 @@ def _json(value: Mapping[str, Any]) -> dict[str, Any]:
 def encode_event(event: RunEvent) -> Message:
     if isinstance(event, StepChanged):
         return {"type": "step", "index": event.index, "reason": event.reason,
-                "acknowledge": event.acknowledge}
+                "acknowledge": event.acknowledge, "lead": event.lead}
     if isinstance(event, Cue):
         return {"type": "cue", "text": event.text, "kind": event.kind, "priority": event.priority}
     if isinstance(event, Verdict):
@@ -138,7 +138,8 @@ def decode_event(message: Message) -> RunEvent:
     kind = message.get("type")
     if kind == "step":
         return StepChanged(int(message["index"]), reason=message["reason"],
-                           acknowledge=bool(message["acknowledge"]))
+                           acknowledge=bool(message["acknowledge"]),
+                           lead=str(message.get("lead", "")))
     if kind == "cue":
         return Cue(str(message["text"]), kind=message["kind"], priority=int(message["priority"]))
     if kind == "verdict":

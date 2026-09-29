@@ -26,8 +26,8 @@ only-include = ["main.py"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-pythonpath = ["worker", "guidance", "services/dashscope-speech", "tests"]
-testpaths = ["tests", "eval"]
+pythonpath = ["worker", "guidance", "backends/rpi-hat-judge", "services/dashscope-speech", "tests"]
+testpaths = ["tests", "eval", "backends/rpi-hat-judge/tests"]
 markers = [
   "gpu: requires local GPU, Docker, or NVENC",
   "integration: starts a real service process",

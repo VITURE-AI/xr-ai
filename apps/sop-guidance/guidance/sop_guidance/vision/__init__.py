@@ -26,6 +26,7 @@ from .overlay import (
     OverlayStyle,
     load_detector_profiles,
     union_coverage,
+    weight_problems,
 )
 
 __all__ = [
@@ -48,4 +49,5 @@ __all__ = [
     "load_detector_profiles",
     "load_geometry_plugin",
     "union_coverage",
+    "weight_problems",
 ]

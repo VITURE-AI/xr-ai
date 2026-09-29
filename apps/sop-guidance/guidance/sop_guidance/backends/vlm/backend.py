@@ -17,12 +17,11 @@ from loguru import logger
 from pydantic import ValidationError
 
 from ...procedures import Sop, SopFormatError, load_sop_file
+from ...vision.overlay import weight_problems
 from ..base import BackendServices, Capabilities, RunContext, StepInfo
 from .config import VlmBackendConfig
 from .grading import OverlayPrompting
 from .run import VlmRun
-
-_LFS_POINTER_PREFIX = b"version https://git-lfs"
 
 
 class VlmBackend:
@@ -90,10 +89,7 @@ class VlmBackend:
                     f"provided by the geometry profile (have: {', '.join(gates) or 'none'})"
                 )
         if annotator is not None:
-            for path in _model_files(annotator.profile):
-                problem = _weights_problem(path)
-                if problem:
-                    problems.append(problem)
+            problems.extend(weight_problems(annotator.profile))
         if not any(step.reference_reliable for step in self.sop.steps):
             logger.warning(
                 "procedure {!r}: no step has a reference image, so no step can "
@@ -136,35 +132,6 @@ class VlmBackend:
         if not 0 <= start_step < len(self.sop.steps):
             raise ValueError(f"step {start_step + 1} is out of range")
         return VlmRun(self, ctx, start_step=start_step)
-
-
-def _model_files(profile: Any) -> list[Path]:
-    """Weight files a detector profile points at, for pointer checks."""
-
-    paths: list[Path] = []
-    for attr in ("model", "model_path"):
-        raw = getattr(profile, attr, None)
-        if raw:
-            paths.append(Path(str(raw)))
-            break
-    hands = getattr(profile, "hands", None)
-    for attr in ("model", "model_path"):
-        raw = getattr(hands, attr, None) if hands is not None else None
-        if raw and getattr(hands, "enabled", True):
-            paths.append(Path(str(raw)))
-            break
-    return paths
-
-
-def _weights_problem(path: Path) -> str:
-    candidates = [path] if path.is_file() else sorted(path.glob("*.bin")) if path.is_dir() else []
-    if not candidates:
-        return f"detector weights {path} do not exist"
-    for candidate in candidates:
-        with candidate.open("rb") as stream:
-            if stream.read(len(_LFS_POINTER_PREFIX)) == _LFS_POINTER_PREFIX:
-                return f"detector weights {candidate} are a git-lfs pointer; run git lfs pull"
-    return ""
 
 
 def create_backend(services: BackendServices) -> VlmBackend:
