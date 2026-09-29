@@ -1,0 +1,89 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# DashScope speech shim: hosted Qwen-ASR (STT) and Qwen-Audio-TTS (TTS) behind
+# the OpenAI-compatible routes xr_ai_models speaks, on ONE port. No local
+# model: every request is a WAN round-trip, so this needs outbound network and
+# an API key in the environment. Keys never go in this file ('api_key' is
+# rejected); only the NAMES of the variables that hold them.
+
+host: "0.0.0.0"
+# One port for both roles. 8106 is also the llama-nemotron-llm default, which
+# sop-guidance does not run; the old separate shims used 8103 (STT) and 8105
+# (TTS), which collide with the local parakeet and pocket-tts services this
+# replaces when both are kept as alternatives.
+port: 8106
+
+# ── Endpoint defaults for both roles (each section below may override) ──────
+# A DashScope key is issued for ONE region. A regional key against the wrong
+# host fails as "Invalid API-key", not as a wrong host, so pick the region the
+# key belongs to: cn (Beijing), intl (Singapore) or us (Virginia).
+region: cn
+# Overrides region, e.g. a dedicated MaaS workspace:
+#   base_url: "https://ws-XXXX.us-east-1.maas.aliyuncs.com/api/v1"
+base_url: ""
+# When this environment variable is set, it wins over base_url/region, so a
+# host can pick its workspace without editing this checked-in file.
+base_url_env: DASHSCOPE_API_URL
+# Environment variable(s) holding the key; the first one set wins.
+api_key_env: DASHSCOPE_API_KEY
+# Per-request timeout; for streaming TTS, the idle timeout between chunks.
+timeout_s: 30
+
+stt:
+  enabled: true
+  # qwen3-asr-flash: 0.78s median (0.71-0.83s) on a 4.95s clip vs.
+  # fun-asr-realtime's 1.01s with a 2.23s tail, and the only hosted model here
+  # whose vocabulary biasing works. US/EU MaaS workspaces publish it as
+  # qwen3-asr-flash-us. Only qwen* ASR models are supported by this shim.
+  model: "qwen3-asr-flash"
+  # Free-text vocabulary biasing, sent as the system turn. Keep it to words the
+  # wearer actually says and the model actually got wrong ("size 0 nose pad"
+  # came back as "the size of your nose graph"); padding it pulls transcripts
+  # toward words nobody said. Keep command phrases out to avoid biasing
+  # navigation. Measured: bare "changed the feature Luma Ultra, no spam" ->
+  # with this "change the feature Luma Ultra nose pad".
+  context: >-
+    The wearer is speaking English to smart glasses called Helix.
+    Expect this vocabulary: VITURE, VITURE Luma Ultra, XR glasses,
+    nose pad, nosepad, size 0 nose pad, size 1 nose pad, solid saddle,
+    wire butterfly, bridge slot, magnetic socket, metal prongs, temple arm,
+    lens, frame.
+  # qwen3-asr-flash sometimes transcribes the system turn instead of the
+  # audio. A transcript containing 4+ context terms is dropped as silence
+  # (observed live restarting guidance from step 1).
+  drop_context_echo: true
+  # Passed through as parameters.asr_options, e.g. {language: en, enable_itn: false}.
+  asr_options: {}
+  # Per-role overrides: region, base_url, base_url_env, api_key_env, timeout_s.
+
+tts:
+  enabled: true
+  # Only HTTP SpeechSynthesizer models (qwen-audio-*, cosyvoice-*) are supported.
+  model: "qwen-audio-3.0-tts-flash"
+  # loongjohn: calm male system voice (English). longanhuan_v3.6 is the female
+  # zh/en alternative. Voices must match the model family; check the DashScope
+  # voice list for gender and language before switching.
+  voice: "loongjohn"
+  # Qwen-Audio-3.0-TTS only (dropped with a warning for other models): a
+  # standing plain-language delivery direction applied to every utterance.
+  # Chinese and English only, 1600 tokens max.
+  instruction: >-
+    Speak slowly and deliberately, noticeably slower than normal conversation.
+    Calm, composed and formal, like a professional guidance assistant giving
+    directions to someone who must follow them carefully. Even tone, clear
+    articulation, a short pause after each instruction. No excitement, no
+    sing-song intonation.
+  # true lets DashScope rewrite the instruction for better prosody.
+  optimize_instruction: false
+  # Output rate for WAV and PCM; reported to streaming clients in
+  # x-audio-sample-rate.
+  sample_rate: 24000
+  # Serve {"stream": true, "response_format": "pcm"} as a chunked PCM stream.
+  streaming_enabled: true
+  # Borrow TTS from another region without moving ASR: some regions serve ASR
+  # but publish no TTS model. When DASHSCOPE_TTS_API_KEY is set it wins (the
+  # top-level variable is the fallback); pair it with DASHSCOPE_TTS_API_URL
+  # (or a region/base_url here) for that key's region.
+  api_key_env: DASHSCOPE_TTS_API_KEY
+  base_url_env: DASHSCOPE_TTS_API_URL

@@ -256,6 +256,8 @@ async def test_old_disconnect_preserves_reconnected_participant_audio() -> None:
     client = RoomClient.__new__(RoomClient)
     client._file_tasks = {}
     client._return_audio = {"alice": old_entry}
+    client._return_video = {}
+    client._return_video_lock = asyncio.Lock()
     client._ep = _Endpoint()
     client._room = SimpleNamespace(local_participant=_LocalParticipant())
     client._refresh_return_track_permissions = lambda: None

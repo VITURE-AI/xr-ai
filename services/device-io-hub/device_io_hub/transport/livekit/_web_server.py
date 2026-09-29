@@ -5,11 +5,13 @@
 Web server — serves the standalone web client and a token endpoint.
 
 Serves:
-  GET  /token           — signed LiveKit JWT; returns {token, url, room}
-  GET  /cert            — development root CA as an installable profile
-  GET  /rtc[/*]/validate — proxied to LiveKit HTTP (token pre-check)
-  WS   /rtc[/*]         — proxied to LiveKit WebSocket signaling
-  GET  /*               — static files from web_client_dir (SPA fallback)
+  GET     /token            — signed LiveKit JWT; returns {token, url, room}
+  GET     /cert             — development root CA as an installable profile
+  GET     /clients          — room roster with each client's role and input
+  DELETE  /clients/{id}     — disconnect that participant
+  GET     /rtc[/*]/validate — proxied to LiveKit HTTP (token pre-check)
+  WS      /rtc[/*]          — proxied to LiveKit WebSocket signaling
+  GET     /*                — static files from web_client_dir (SPA fallback)
 
 When ``web_server_tls`` is enabled the /token endpoint returns a same-origin
 ``wss://<host>:<web_server_port>/rtc`` URL and the /rtc* routes proxy to the
@@ -29,6 +31,7 @@ from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
 from . import _lk_proxy
+from ._clients import ClientAdmin, mount_client_admin, validated_role
 from ._tls import _read_public_root_ca, ensure_development_certificates
 from ._token import make_client_token
 from ._token_server import _proxy_client_lifespan, serve_safe, wait_until_bound
@@ -45,16 +48,17 @@ def _build_app(cfg: LiveKitConnectorConfig, cert_bytes: bytes | None) -> FastAPI
 
     # Shared so /rtc/validate hits don't pay TCP+TLS startup per request.
     proxy_client = httpx.AsyncClient(timeout=5.0)
+    admin = ClientAdmin(cfg, lk_internal_http)
 
     app = FastAPI(
         title="DeviceIOHub Web Server", docs_url=None, redoc_url=None,
-        lifespan=_proxy_client_lifespan(proxy_client),
+        lifespan=_proxy_client_lifespan(proxy_client, admin),
     )
     app.state.development_root_ca = cert_bytes
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
-        allow_methods=["GET"],
+        allow_methods=["GET", "DELETE"],
         allow_headers=["*"],
     )
 
@@ -71,7 +75,11 @@ def _build_app(cfg: LiveKitConnectorConfig, cert_bytes: bytes | None) -> FastAPI
         )
 
     @app.get("/token")
-    async def get_token(request: Request, identity: str = Query(default="web-user")) -> dict:
+    async def get_token(
+        request: Request,
+        identity: str = Query(default="web-user"),
+        role: str = Query(default="", description="Role published as the xr.role attribute"),
+    ) -> dict:
         # Use the request's Host header so the URL works for both localhost
         # and remote clients without per-deployment config.
         host = request.headers.get("host", "localhost").split(":")[0]
@@ -79,8 +87,10 @@ def _build_app(cfg: LiveKitConnectorConfig, cert_bytes: bytes | None) -> FastAPI
             lk_url = f"wss://{host}:{cfg.web_server_port}"
         else:
             lk_url = f"ws://{host}:{cfg.lk_port_ws}"
-        token = make_client_token(cfg, identity=identity, ttl=None)
+        token = make_client_token(cfg, identity=identity, ttl=None, role=validated_role(role))
         return {"token": token, "room": cfg.room_name, "url": lk_url}
+
+    mount_client_admin(app, admin)
 
     _lk_proxy.mount_rtc_proxy(
         app,

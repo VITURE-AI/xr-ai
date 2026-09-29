@@ -1,0 +1,153 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Foreground routing cases for eval.py. Idle cases run with the idle prompt and
+# the idle tool set (guidance__list_procedures/start/status + current_view);
+# active cases run with the shared active prompt, the procedure's own prompt
+# and the backend's step context, exactly as the worker builds them.
+
+# ── idle ─────────────────────────────────────────────────────────────────────
+- name: idle-greeting
+  query: Hello there.
+  expected_tool: null
+  max_response_chars: 200
+- name: idle-general-knowledge
+  query: What is the capital of France?
+  expected_tool: null
+  expected_response_pattern: "\\bParis\\b"
+- name: idle-start-by-title
+  query: Guide me through the nose pad replacement.
+  expected_tool: guidance__start
+  expected_args: {procedure_id: nosepad-replacement, entry_mode: start}
+- name: idle-start-by-alias
+  query: Can you walk me through replacing the nosepad on my glasses?
+  expected_tool: guidance__start
+  expected_args: {procedure_id: nosepad-replacement, entry_mode: start}
+- name: idle-start-at-step
+  query: Start the nose pad replacement at step three.
+  expected_tool: guidance__start
+  expected_args: {procedure_id: nosepad-replacement, entry_mode: step, at_step: 3}
+- name: idle-resume
+  query: Resume the nose pad replacement where I stopped.
+  expected_tool: guidance__start
+  expected_args: {procedure_id: nosepad-replacement, entry_mode: resume}
+- name: idle-list-capabilities
+  query: Which procedures can you guide me through?
+  expected_tool: [guidance__list_procedures, null]
+  forbidden_response_pattern: "guidance__|list_procedures|tool"
+- name: idle-unknown-procedure-not-started
+  query: Walk me through replacing the battery in my car.
+  expected_tool: [null, guidance__list_procedures]
+  forbidden_response_pattern: "\\bstep \\d+ of \\d+"
+- name: idle-looks-through-camera
+  query: What am I holding right now?
+  expected_tool: current_view
+- name: idle-how-to-question-does-not-invent-steps
+  query: What is the second step of replacing the nose pad?
+  expected_tool: [null, guidance__start, guidance__list_procedures]
+  forbidden_response_pattern: "\\bstep \\d+ of \\d+"
+
+# ── active: step 2 (detach the installed pad) ────────────────────────────────
+- name: active-finished-asks-to-advance
+  route: active
+  step: 2
+  query: Okay, I've taken it off.
+  verdict: {completed: false, observation: "The nose pad is still attached to the bridge.", age_s: 3}
+  expected_tool: guidance__advance
+- name: active-repeat-instruction
+  route: active
+  step: 2
+  query: Sorry, can you say the instruction again?
+  expected_tool: guidance__repeat_step
+- name: active-stop
+  route: active
+  step: 2
+  query: Stop the guidance.
+  expected_tool: guidance__stop
+- name: active-is-this-right-answers-from-verdict
+  route: active
+  step: 2
+  query: Am I doing this right?
+  verdict:
+    completed: false
+    observation: The wearer pinches the nose pad but it is still seated on the bridge.
+    age_s: 2
+    checks:
+      - {requirement: nose pad detached from the bridge, visible: false, evidence: ""}
+  expected_tool: null
+  expected_response_pattern: "pull|still|attached|bridge|off"
+  # "frame" is omitted on purpose: the glasses frame is a part of this task.
+  forbidden_response_pattern: "\\b(image|camera|picture|photo|detector|nosepad_\\d)\\b|\\bstep \\d+ of \\d+"
+  max_response_chars: 260
+- name: active-stale-verdict-checks-now
+  route: active
+  step: 2
+  query: Is it off now? Take a look.
+  expected_tool: [guidance__check_now, null]
+- name: active-off-topic-still-answered
+  route: active
+  step: 2
+  query: By the way, what is the capital of Japan?
+  expected_tool: null
+  expected_response_pattern: "\\bTokyo\\b"
+- name: active-restart
+  route: active
+  step: 2
+  query: Let's start this over from the beginning.
+  expected_tool: guidance__start
+  expected_args: {procedure_id: nosepad-replacement, entry_mode: start}
+- name: active-jump-to-step
+  route: active
+  step: 2
+  query: Skip ahead to step four.
+  expected_tool: guidance__start
+  expected_args: {procedure_id: nosepad-replacement, entry_mode: step, at_step: 4}
+
+# ── active: step 3 (pick up a replacement) ───────────────────────────────────
+- name: active-which-pad-is-size-zero
+  route: active
+  step: 3
+  query: Which one is size zero?
+  expected_tool: null
+  expected_response_pattern: "solid|saddle|one (moulded|molded) piece"
+  forbidden_response_pattern: "nosepad_\\d|\\blabel|\\bbox\\b|detector"
+- name: active-wearer-request-mismatch
+  route: active
+  step: 3
+  query: Is this the right one?
+  wearer_requests: [size zero nose pad]
+  verdict:
+    completed: false
+    observation: A hand holds a wire butterfly nose pad with two oval pads on thin metal arms.
+    age_s: 2
+    checks:
+      - {requirement: a replacement nose pad is held in a hand, visible: true, evidence: "fingers grip a wire pad above the table"}
+      - {requirement: matches what the wearer asked for, visible: false, evidence: "the pad in hand is the wire butterfly, not the solid saddle"}
+  expected_tool: null
+  expected_response_pattern: "solid|saddle|size zero"
+  forbidden_response_pattern: "\\b(image|camera|picture|detector)\\b"
+
+# ── active: step 4 (fit the new pad) ─────────────────────────────────────────
+- name: active-done-with-fresh-pass-advances
+  route: active
+  step: 4
+  query: It's clicked in, I'm done.
+  verdict:
+    completed: true
+    observation: A solid saddle nose pad is seated flush in the bridge slot.
+    age_s: 1
+    checks:
+      - {requirement: new nose pad seated in the bridge slot, visible: true, evidence: "pad sits flush between the lenses"}
+  expected_tool: guidance__advance
+- name: active-never-invents-completion
+  route: active
+  step: 4
+  query: So is that step done then?
+  verdict:
+    completed: false
+    observation: The new pad is held against the bridge but its prongs are not in the slot.
+    age_s: 2
+    checks:
+      - {requirement: new nose pad seated in the bridge slot, visible: false, evidence: ""}
+  expected_tool: null
+  forbidden_response_pattern: "^\\s*(yes|yep|yeah|great|perfect|done|it'?s done|that'?s done)\\b|\\bstep \\d+ of \\d+"

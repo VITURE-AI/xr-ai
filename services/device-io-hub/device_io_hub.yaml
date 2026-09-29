@@ -28,6 +28,9 @@ lk_use_external_ip: false
 # Enable only when the cloud NAT does not support LiveKit's public-IP self-ping
 # validation. Requires lk_use_external_ip: true.
 lk_skip_external_ip_validation: false
+# The hub starts the LiveKit server container itself. Set false when LiveKit
+# already runs (e.g. as its own compose service); the hub then waits for it.
+# lk_manage_server: true
 
 # ── Return audio pacing ───────────────────────────────────────────────────────
 # Maximum queued TTS audio per participant. Built-in voice output is paced
@@ -82,6 +85,15 @@ enable_token_server: true
 # already in use"; either set a free port here, or add `ignoredPorts=8000`
 # under `[experimental]` in %UserProfile%\.wslconfig and run `wsl --shutdown`.
 # token_server_port: 8000
+
+# ── Return video ──────────────────────────────────────────────────────────────
+# Processed video an agent publishes for a participant (for example an
+# annotated camera view) appears as track xr-hub-overlay-<participant>.
+# "participant" lets only that participant subscribe; "room" lets every
+# participant in the room subscribe, for observer clients.
+# return_video_audience: participant
+# return_video_max_bitrate: 6000000
+# return_video_max_framerate: 30
 
 # ── Video recording (NVENC, optional) ─────────────────────────────────────────
 # Requires pynvvideocodec.  Frames are encoded via NVENC and written as

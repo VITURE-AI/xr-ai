@@ -1,0 +1,63 @@
+{
+  "models": {
+    "llm": {
+      "category": "llm",
+      "adapter": {
+        "kind": "openai_compat",
+        "model_name": "qwen3.6-35b-a3b",
+        "capabilities": {
+          "streaming": true,
+          "vision": true,
+          "tool_calls": true
+        },
+        "default_extras": {
+          "enable_thinking": false
+        }
+      },
+      "endpoint": {
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode",
+        "api_key_env": "DASHSCOPE_API_KEY",
+        "timeout": 30,
+        "readiness": "none"
+      }
+    },
+    "vlm": {
+      "category": "vlm",
+      "adapter": {
+        "kind": "openai_compat",
+        "model_name": "qwen3.6-35b-a3b",
+        "capabilities": {
+          "streaming": true,
+          "vision": true
+        },
+        "default_extras": {
+          "enable_thinking": false
+        }
+      },
+      "endpoint": {
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode",
+        "api_key_env": "DASHSCOPE_API_KEY",
+        "timeout": 30,
+        "readiness": "none"
+      }
+    },
+    "stt": {
+      "adapter": {
+        "preset": "parakeet_stt"
+      },
+      "endpoint": {
+        "base_url": "http://localhost:8106",
+        "timeout": 30
+      }
+    },
+    "tts": {
+      "adapter": {
+        "preset": "pocket_tts"
+      },
+      "endpoint": {
+        "base_url": "http://localhost:8106",
+        "timeout": 60
+      }
+    }
+  }
+}

@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# DeviceIOHub inside the compose stack (docker/compose.yaml). LiveKit runs as
+# its own service there, so the hub waits for it instead of starting it.
+# Keys and ports must match docker/livekit.yaml.
+
+api_key:    devkey
+api_secret: devsecret-xr-livekit-prototype-2026
+room_name:  xr-room
+
+lk_port_ws:  7880
+lk_port_tcp: 7881
+lk_port_udp: 7882
+lk_manage_server: false
+
+enable_web_server: true
+web_server_port:   8080
+web_client_dir:    /workspace/client-samples/web
+
+enable_token_server: true
+
+# The operator's browser watches the wearer's annotated view.
+return_video_audience: participant

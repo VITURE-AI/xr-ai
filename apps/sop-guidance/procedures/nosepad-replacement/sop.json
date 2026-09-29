@@ -1,0 +1,144 @@
+{
+  "schema_version": 1,
+  "name": "nosepad replacement",
+  "summary": "A step-by-step video demonstration on how to remove and replace the magnetic nose pad on a pair of Luma Ultra XR glasses.",
+  "duration_seconds": 28.607,
+  "parts": [
+    "Size 0 nose pad (detector label nosepad_0) -- the solid saddle, sometimes called the wing: ONE moulded black curved piece, in one continuous body, with no wires and no separate pads.",
+    "Size 1 nose pad (detector label nosepad_1) -- the wire butterfly: a small bracket with TWO thin metal arms coming off it, each arm ending in an oval pad, so it reads as two little pads on wires rather than one solid piece."
+  ],
+  "source": {
+    "generator": "xr-ai-demo-generator",
+    "model": "gemini-3.6-flash",
+    "prompts_digest": "9f0e19e53314e301",
+    "transcript": false,
+    "narration": true
+  },
+  "steps": [
+    {
+      "at_seconds": 6.27,
+      "description": "Hold your Luma Ultra glasses securely by the frame with the back side facing you to clear access to the nose bridge.",
+      "image": "frames/step_01.jpg",
+      "teacher_caption": "Two hands hold a pair of dark-framed XR glasses above a light wooden surface, with the back of the frames facing towards the viewer. A small, detached black nosepad piece rests on the table surface behind and directly above the center bridge of the glasses.",
+      "expected_requirements": [
+        "Hands hold dark-framed glasses",
+        "Back of glasses frame faces viewer"
+      ],
+      "key_info": {
+        "objects": [
+          "dark-framed glasses"
+        ],
+        "action": "Hold the glasses frame",
+        "position": "Back side of the frame facing towards the viewer",
+        "target_state": "Glasses are held with the back side of the frame facing the viewer",
+        "ignore": [
+          "background",
+          "lighting",
+          "camera angle",
+          "wearer's clothing",
+          "detached nosepad on table"
+        ]
+      },
+      "reference_images": [
+        "frames/step_01.jpg"
+      ]
+    },
+    {
+      "at_seconds": 12.18,
+      "description": "Grasp the installed nose pad firmly and pull it straight back away from the frame to detach it from its magnetic socket.",
+      "image": "frames/step_02_b.jpg",
+      "teacher_caption": "A person's right hand pinches a small nosepad assembly featuring two dark pads near the center of a pair of black XR glasses. The left hand supports the left arm of the glasses, which displays orange lettering on the side. The nosepad piece is held directly above the frame's bridge against a light wooden surface.",
+      "expected_requirements": [
+        "bridge of the glasses is now empty",
+        "nosepad detached and clear of the frame",
+        "glasses held in the other hand"
+      ],
+      "key_info": {
+        "objects": [
+          "black XR glasses",
+          "small nosepad assembly"
+        ],
+        "action": "Pull the nosepad assembly away from the glasses frame bridge",
+        "position": "clear of the frame bridge, which is now empty",
+        "target_state": "The nosepad is off the glasses and the bridge is EMPTY — no pad remains attached to the frame. A pad that is merely pinched, gripped, or touched while still attached to the bridge is NOT complete; the pad and the frame must be visibly separated.",
+        "ignore": [
+          "background",
+          "lighting",
+          "camera angle",
+          "wearer's clothing",
+          "which hand holds what",
+          "light wooden surface",
+          "orange lettering on glasses arm"
+        ]
+      },
+      "before_image": "frames/step_02_a.jpg",
+      "geometry_gate": "no_pad_on_glasses",
+      "reference_images": [
+        "frames/step_02_b.jpg"
+      ]
+    },
+    {
+      "at_seconds": 16.3,
+      "description": "Set the old nose pad aside on the table and pick up your preferred replacement nose pad from the available options.",
+      "image": "frames/step_03.jpg",
+      "teacher_caption": "A person's left hand holds a pair of black XR glasses in the foreground above a wooden surface. Their right hand rests on the table behind the right temple of the glasses, near three small black nose pads arranged in a row across the background.",
+      "expected_requirements": [
+        "a replacement nose pad is off the table and held in a hand, gripped between the fingers and clear of the table surface -- pads still lying on the table, or a hand merely near them, do NOT count"
+      ],
+      "key_info": {
+        "objects": [
+          "small black nose pads",
+          "black XR glasses"
+        ],
+        "action": "Pick up a replacement nose pad from the table",
+        "position": "Held in hand above the table surface near XR glasses",
+        "target_state": "A replacement nose pad is IN A HAND -- lifted off the table and gripped between the fingers. That is the whole test, and it is the one thing that must change for this step to be done.\n\nIt is NOT done while every pad is still lying on the table, however close a hand is to them: reaching towards the pads, resting a hand beside them, or pointing at them is not picking one up. Spare pads on the table are the starting state of this step, so seeing them there is evidence the step has NOT happened, never evidence that it has.\n\nThe instruction says PREFERRED on purpose: any of the spare pads satisfies it, and normally you must not judge which one. The one exception is when the wearer has asked out loud for a particular size. The detector labels pads by size -- a box reading nosepad_0 is the size the wearer means by \"size zero\" or \"number zero\", and nosepad_1 is \"size one\" -- so when they named a size, the pad they picked up must carry that label. If they picked up the other one, the step is NOT complete: say which size they asked for and which one they are holding.",
+        "ignore": [
+          "background",
+          "lighting",
+          "camera angle",
+          "wearer's clothing",
+          "which replacement nose pad is selected -- UNLESS the wearer asked for a specific size, which they must then be holding"
+        ]
+      },
+      "geometry_gate": "pad_in_hand",
+      "reference_images": [
+        "frames/step_03.jpg"
+      ]
+    },
+    {
+      "at_seconds": 26.0,
+      "description": "Align the metal prongs of the new nose pad with the magnetic slot on the bridge and push it firmly into place until it holds on its own, then let go and show me the glasses.",
+      "image": "frames/step_04_b.jpg",
+      "teacher_caption": "Both hands hold a pair of dark-framed glasses in the foreground, presenting the attached nose pads facing toward the camera. In the background, two additional nose pad accessories lie on the light wooden surface above the glasses. The glasses are held centrally in front of the tabletop.",
+      "expected_requirements": [
+        "a nose pad seated in the bridge slot between the lenses, prongs inserted -- not merely touching the frame or resting on a lens"
+      ],
+      "key_info": {
+        "objects": [
+          "black XR glasses",
+          "nose pad"
+        ],
+        "action": "Seat a nose pad into the bridge slot so it stays attached on its own",
+        "position": "attached to the bridge of the black XR glasses",
+        "target_state": "A nose pad is seated in the BRIDGE SLOT -- the narrow piece between the two lenses, where the metal prongs go in. WHERE THE PAD IS, and HOW IT SITS THERE, is the whole test.\n\nIt is NOT seated, and the step is INCOMPLETE, when the pad is: held clear of the bridge; touching or lying on a lens; on the rim, the temple arm, or anywhere on the frame other than the bridge slot; or sitting with its metal prongs visible rather than inserted. Overlapping the glasses in the picture is not evidence of seating -- a pad can rest on a lens and cover much of the frame while being nowhere near the bridge. Look at the bridge itself and say whether a pad is in it.\n\nA seated pad sits FLUSH, and this is what separates a finished step from a nearly-finished one. In the reference, the piece straddles the bridge: one pad on each side of it, both tight against the frame, with no gap and no metal wire or prong showing between the pad and the frame. A pad that HANGS BELOW the bridge on a visible stalk or prong, drops lower than the bottom of the lenses, shows only one of its two pads against the frame, or leaves a visible gap between itself and the frame is dangling or only half inserted -- NOT seated. That pose is easy to mistake for a finished one, so when a pad is at the bridge, say explicitly whether it is flush against it or hanging off it before deciding.\n\nDo NOT judge the hands, and never report them as a problem. The wearer has to hold the glasses to show them to you, so hands on the frame, hands near the bridge, and a hand or finger in front of or behind the pad are all expected and acceptable. In particular do NOT claim a finger or thumb is holding, pinching or steadying the pad: from a single flat picture you cannot tell contact from something passing behind, and asserting it leaves the wearer being told to let go of something they have already released. Whether the pad is held is decided elsewhere, from detector geometry, not by you.\n\nIf a pad IS in the bridge slot the step is COMPLETE, however the glasses are being held. Spare pads lying on the table, or a second pad elsewhere on the frame, are normal at this step and never make it complete on their own.",
+        "ignore": [
+          "the hands entirely -- holding the glasses is required to show them",
+          "how the glasses are held, and by which hand",
+          "where the hands are, and how close a hand is to the bridge",
+          "whether a hand or finger appears in front of or behind the pad",
+          "spare or unused nose pads resting on the table",
+          "how many nose pads are visible in the scene",
+          "which nose pad size was chosen -- UNLESS the wearer asked for a specific size, in which case the pad at the bridge must carry that size's label (nosepad_0 for \"size zero\", nosepad_1 for \"size one\")",
+          "wearer's clothing"
+        ]
+      },
+      "before_image": "frames/step_04_a.jpg",
+      "geometry_gate": "pad_on_glasses",
+      "reference_images": [
+        "frames/step_04_b.jpg"
+      ],
+      "hold_seconds": 5.0
+    }
+  ]
+}

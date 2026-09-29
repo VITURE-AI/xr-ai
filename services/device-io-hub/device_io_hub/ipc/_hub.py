@@ -21,11 +21,12 @@ path for participant A's data to reach participant B. The only supported flow
 is: participant → hub → consumer (agent) → hub → same participant.
 
 Enforcement:
-  • send_return_audio / send_return_data / send_return_audio_flush validate
-    that the target participant is currently connected; unknown targets are
-    dropped with a warning.
-  • Return-traffic topics (return_audio.*, return_audio_flush.*, return_data.*)
-    are connector-only; ProcessorEndpoint's default subscription excludes them.
+  • send_return_audio / send_return_data / send_return_audio_flush /
+    send_return_video validate that the target participant is currently
+    connected; unknown targets are dropped with a warning.
+  • Return-traffic topics (return_audio.*, return_audio_flush.*, return_data.*,
+    return_video.*, return_video_stop.*) are connector-only;
+    ProcessorEndpoint's default subscription excludes them.
   • The LiveKit transport publishes one return-audio track per participant
     (xr-hub-return-{pid}) with subscribe permissions restricted so each pid
     can only receive their own track. Return data uses destination_identities
@@ -49,7 +50,8 @@ from loguru import logger
 
 from xr_ai_hub import (AGENT_STATUS_TOPIC, AudioChunk, ConnectorRegistration,
                        ControlMessage, DataMessage, FileMessage, FrameData, MsgType,
-                       ParticipantEvent, ReturnAudioFlush, ShmRingBuffer, SlotView,
+                       ParticipantAttributes, ParticipantEvent, ReturnAudioFlush,
+                       ReturnVideoFrame, ReturnVideoStop, ShmRingBuffer, SlotView,
                        decode, encode)
 from xr_ai_hub._capture import CAPTURE_PUBLISH_PREFIX, CAPTURE_TOPICS
 from xr_ai_hub._file_ordering import FileRoute, FileSessionOrderer
@@ -90,6 +92,8 @@ TOPIC_CONTROL            = b"control"
 TOPIC_RETURN_AUDIO       = b"return_audio"
 TOPIC_RETURN_AUDIO_FLUSH = b"return_audio_flush"
 TOPIC_RETURN_DATA        = b"return_data"
+TOPIC_RETURN_VIDEO       = b"return_video"
+TOPIC_RETURN_VIDEO_STOP  = b"return_video_stop"
 _DEFAULT_FILE_MAX_BYTES = 16 * 1024 * 1024
 _FILE_IPC_METADATA_ALLOWANCE = 64 * 1024
 
@@ -172,6 +176,7 @@ class HubEndpoint:
         # participant_id → connector_id (updated on PARTICIPANT_EVENT)
         self._participant_connector: dict[str, str] = {}
         self._participant_sessions: dict[str, str] = {}
+        self._participant_attributes: dict[str, dict[str, str]] = {}
         self._file_orderer = FileSessionOrderer(file_hwm)
         self._file_session_events: asyncio.Queue[ParticipantEvent] = asyncio.Queue()
         # (participant_id, track_id) → (ring, SlotView) of the latest frame.
@@ -193,6 +198,13 @@ class HubEndpoint:
         self._agent_status: dict[str, dict[str, str]] = {}
         # agent_id → participants it answers for; None means all of them.
         self._agent_scope: dict[str, set[str] | None] = {}
+        # Agents known only from their status reports, not a presence message:
+        # agents attached before this hub (re)started announce once, at their
+        # own start, and would otherwise leave their clients at "loading".
+        self._implicit_agents: set[str] = set()
+        # Agents that detached; a status report racing the detach must not
+        # bring them back.
+        self._detached_agents: set[str] = set()
         # participant_id → last aggregate published, to suppress duplicates.
         self._published_status: dict[str, str] = {}
 
@@ -291,6 +303,28 @@ class HubEndpoint:
         topic = f"return_audio_flush.{flush.participant_id}.".encode()
         await self._pub.send_multipart([topic, encode(MsgType.RETURN_AUDIO_FLUSH, flush)])
 
+    async def send_return_video(self, frame: ReturnVideoFrame) -> None:
+        """
+        Send one processed video frame to the connector that owns its target.
+
+        Drops the frame for participants that are not currently connected.
+        """
+        if not self._is_connected(frame.participant_id):
+            logger.debug(
+                "send_return_video: participant {!r} not connected — dropped",
+                frame.participant_id,
+            )
+            return
+        topic = f"return_video.{frame.participant_id}.".encode()
+        await self._pub.send_multipart([topic, encode(MsgType.RETURN_VIDEO, frame)])
+
+    async def send_return_video_stop(self, stop: ReturnVideoStop) -> None:
+        """Ask the owning connector to unpublish one processed-video track."""
+        if not self._is_connected(stop.participant_id):
+            return
+        topic = f"return_video_stop.{stop.participant_id}.".encode()
+        await self._pub.send_multipart([topic, encode(MsgType.RETURN_VIDEO_STOP, stop)])
+
     def _is_connected(self, participant_id: str) -> bool:
         return participant_id in self._participant_connector
 
@@ -309,8 +343,18 @@ class HubEndpoint:
             status   = payload["status"]
         except (ValueError, TypeError, KeyError, UnicodeDecodeError):
             return None
+        agent_id = str(agent_id)
         self._agent_status.setdefault(agent_id, {})[msg.participant_id] = str(status)
-        return str(agent_id)
+        if agent_id not in self._agent_scope and agent_id not in self._detached_agents:
+            self._implicit_agents.add(agent_id)
+            self._agent_scope[agent_id] = set()
+        if agent_id in self._implicit_agents:
+            # Only the participants it has spoken for: an agent scoped to one
+            # client must not hold every other client at "loading".
+            scope = self._agent_scope[agent_id]
+            if scope is not None:
+                scope.add(msg.participant_id)
+        return agent_id
 
     def _responsible_agents(self, participant_id: str) -> list[str]:
         """Agent ids that answer for *participant_id*."""
@@ -728,6 +772,7 @@ class HubEndpoint:
                 self._participant_sessions[msg.participant_id] = (
                     msg.participant_session_id
                 )
+                self._participant_attributes[msg.participant_id] = dict(msg.attributes)
             else:
                 active_session = self._participant_sessions.get(msg.participant_id, "")
                 if (
@@ -742,6 +787,7 @@ class HubEndpoint:
                     return
                 self._participant_connector.pop(msg.participant_id, None)
                 self._participant_sessions.pop(msg.participant_id, None)
+                self._participant_attributes.pop(msg.participant_id, None)
                 departed_session = msg.participant_session_id or active_session
                 self._published_status.pop(msg.participant_id, None)
                 for per_participant in self._agent_status.values():
@@ -815,6 +861,31 @@ class HubEndpoint:
         elif type_id == MsgType.RETURN_AUDIO_FLUSH:
             await self.send_return_audio_flush(msg)
 
+        elif type_id == MsgType.RETURN_VIDEO:
+            await self.send_return_video(msg)
+
+        elif type_id == MsgType.RETURN_VIDEO_STOP:
+            await self.send_return_video_stop(msg)
+
+        elif type_id == MsgType.PARTICIPANT_ATTRIBUTES:
+            active_session = self._participant_sessions.get(msg.participant_id)
+            if active_session is None or (
+                msg.participant_session_id
+                and active_session
+                and msg.participant_session_id != active_session
+            ):
+                return
+            self._participant_attributes[msg.participant_id] = dict(msg.attributes)
+            await self._pub.send_multipart([
+                b"participant",
+                encode(MsgType.PARTICIPANT_ATTRIBUTES, ParticipantAttributes(
+                    participant_id=msg.participant_id,
+                    attributes=dict(msg.attributes),
+                    pts_us=msg.pts_us,
+                    participant_session_id=active_session,
+                )),
+            ])
+
         elif type_id == MsgType.ROSTER_REQUEST:
             await self._replay_roster()
 
@@ -833,9 +904,13 @@ class HubEndpoint:
                 self._agent_scope[msg.agent_id] = (
                     None if msg.scope is None else set(msg.scope)
                 )
+                self._implicit_agents.discard(msg.agent_id)
+                self._detached_agents.discard(msg.agent_id)
             else:
                 self._agent_status.pop(msg.agent_id, None)
                 self._agent_scope.pop(msg.agent_id, None)
+                self._implicit_agents.discard(msg.agent_id)
+                self._detached_agents.add(msg.agent_id)
             await self._republish_agent_status()
 
         else:
@@ -856,6 +931,7 @@ class HubEndpoint:
                 participant_id=pid, joined=True,
                 pts_us=pts_us, connector_id=connector_id,
                 participant_session_id=self._participant_sessions.get(pid, ""),
+                attributes=dict(self._participant_attributes.get(pid, {})),
             )
             await self._pub.send_multipart([
                 b"participant", encode(MsgType.PARTICIPANT_EVENT, event),

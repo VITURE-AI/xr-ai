@@ -10,8 +10,10 @@ Connects to the LiveKit room as the hub-side observer, then:
   • Streams decoded video frames (I420) into the ring buffer via push_frame().
   • Streams decoded audio (float32) via push_audio().
   • Forwards data-channel packets via push_data().
+  • Forwards participant attributes on join and on change.
 
-The client never publishes media — it is subscribe-only.
+It publishes only return media that agents address to a participant:
+private return audio and processed return video.
 """
 from __future__ import annotations
 
@@ -34,10 +36,12 @@ from device_io_hub.ipc import (
     FileMessage,
     PixelFormat,
     ReturnAudioFlush,
+    ReturnVideoFrame,
+    ReturnVideoStop,
 )
 
 from ._byte_stream import ByteStreamReadLimits, read_byte_stream
-from ._token import make_client_token
+from ._token import HUB_ROLE, make_client_token
 from .config import (
     _DEFAULT_RETURN_AUDIO_MAX_BUFFER_S,
     LiveKitConnectorConfig,
@@ -61,6 +65,40 @@ _IMAGE_CAPTURE_MIME_TYPES = frozenset({"image/jpeg", "image/png", "image/webp"})
 _IMAGE_CAPTURE_RESPONSE_MIME_TYPES = _IMAGE_CAPTURE_MIME_TYPES | {
     _CAPTURE_REJECTION_MIME_TYPE
 }
+
+#: Name prefix of processed-video tracks. The suffix is the target participant,
+#: so the publication tells every client whose view it renders.
+RETURN_VIDEO_TRACK_PREFIX = "xr-hub-overlay-"
+
+# LiveKit reserves the ``lk.`` attribute namespace for its own agents.
+_RESERVED_ATTRIBUTE_PREFIX = "lk."
+
+_VIDEO_BUFFER_TYPES = {
+    PixelFormat.I420: rtc.VideoBufferType.I420,
+    PixelFormat.NV12: rtc.VideoBufferType.NV12,
+    PixelFormat.RGB24: rtc.VideoBufferType.RGB24,
+    PixelFormat.RGBA: rtc.VideoBufferType.RGBA,
+    PixelFormat.BGRA: rtc.VideoBufferType.BGRA,
+}
+
+
+def _expected_video_bytes(frame: ReturnVideoFrame) -> int:
+    pixels = frame.width * frame.height
+    if frame.fmt in (PixelFormat.I420, PixelFormat.NV12):
+        return pixels * 3 // 2
+    if frame.fmt == PixelFormat.RGB24:
+        return pixels * 3
+    if frame.fmt in (PixelFormat.RGBA, PixelFormat.BGRA):
+        return pixels * 4
+    raise ValueError(f"unsupported return-video pixel format: {frame.fmt}")
+
+
+def _application_attributes(attributes: dict[str, str] | None) -> dict[str, str]:
+    return {
+        key: value
+        for key, value in (attributes or {}).items()
+        if not key.startswith(_RESERVED_ATTRIBUTE_PREFIX)
+    }
 
 
 class _QueuedReturnAudioFrame(NamedTuple):
@@ -241,6 +279,15 @@ class _ReturnAudioEntry(NamedTuple):
     pipe: _ReturnAudioPipe
 
 
+class _ReturnVideoEntry(NamedTuple):
+    session_id: str
+    source: rtc.VideoSource
+    publication: rtc.LocalTrackPublication
+    width: int
+    height: int
+    fmt: PixelFormat
+
+
 _FILE_STREAM_TOPIC = "_streamkit.file"
 _FILE_APPLICATION_TOPIC_ATTRIBUTE = "_streamkit.topic"
 _FILE_RESERVED_PREFIX = "_streamkit."
@@ -319,6 +366,13 @@ class RoomClient:
         # The pipe paces audio into LiveKit at audio rate, so flush_return_audio
         # can drop in-flight TTS instantly even after a burst of chunks.
         self._return_audio: dict[str, _ReturnAudioEntry] = {}
+        # (pid, logical track id) → processed-video publication. Published on
+        # the first frame, republished when size or format changes, and
+        # unpublished on request or when the participant leaves.
+        self._return_video: dict[tuple[str, str], _ReturnVideoEntry] = {}
+        # Serializes publish/unpublish so a burst of frames cannot publish the
+        # same track twice while the first publish is still in flight.
+        self._return_video_lock = asyncio.Lock()
 
         self._room.register_byte_stream_handler(_FILE_STREAM_TOPIC, self._on_file_stream)
 
@@ -336,6 +390,19 @@ class RoomClient:
         def _on_left(participant: rtc.RemoteParticipant) -> None:
             session_id = self._participant_sessions.pop(participant.identity, "")
             self._spawn(self._handle_left(participant, session_id))
+
+        @self._room.on("participant_attributes_changed")
+        def _on_attributes(
+            _changed: dict[str, str],
+            participant: rtc.Participant,
+        ) -> None:
+            if participant.identity not in self._participant_sessions:
+                return
+            self._spawn(self._ep.notify_participant_attributes(
+                participant.identity,
+                _application_attributes(dict(participant.attributes)),
+                _now_us(),
+            ))
 
         @self._room.on("track_subscribed")
         def _on_track(
@@ -419,7 +486,7 @@ class RoomClient:
         self._accepting_files = False
         await self._room.connect(
             self._cfg.lk_internal_url,
-            make_client_token(self._cfg, identity=self._cfg.identity),
+            make_client_token(self._cfg, identity=self._cfg.identity, role=HUB_ROLE),
             options=rtc.RoomOptions(
                 auto_subscribe=True,
                 connect_timeout=15.0,
@@ -522,6 +589,11 @@ class RoomClient:
             return_exceptions=True,
         )
         self._return_audio.clear()
+        await asyncio.gather(
+            *(entry.source.aclose() for entry in self._return_video.values()),
+            return_exceptions=True,
+        )
+        self._return_video.clear()
         await self._room.disconnect()
 
     def _on_file_stream(self, reader: rtc.ByteStreamReader, participant_id: str) -> None:
@@ -764,6 +836,91 @@ class RoomClient:
             return
         entry.pipe.flush()
 
+    async def send_return_video(self, frame: ReturnVideoFrame) -> None:
+        """Publish or update one processed-video track for its participant."""
+        expected = _expected_video_bytes(frame)
+        if frame.width <= 0 or frame.height <= 0 or len(frame.data) != expected:
+            logger.warning(
+                "Invalid return-video frame for {!r} dropped: {}x{} {} has {} bytes, "
+                "expected {}",
+                frame.participant_id, frame.width, frame.height, frame.fmt.name,
+                len(frame.data), expected,
+            )
+            return
+        pid = frame.participant_id
+        key = (pid, frame.track_id)
+        video_frame = rtc.VideoFrame(
+            width=frame.width,
+            height=frame.height,
+            type=_VIDEO_BUFFER_TYPES[frame.fmt],
+            data=frame.data,
+        )
+        async with self._return_video_lock:
+            session_id = self._participant_sessions.get(pid)
+            if session_id is None:
+                return
+            entry = self._return_video.get(key)
+            if entry is not None and (
+                entry.session_id != session_id
+                or (entry.width, entry.height, entry.fmt)
+                != (frame.width, frame.height, frame.fmt)
+            ):
+                await self._unpublish_return_video(key)
+                entry = None
+            if entry is None:
+                entry = await self._publish_return_video(frame, session_id)
+                self._return_video[key] = entry
+                self._refresh_return_track_permissions()
+            entry.source.capture_frame(video_frame, timestamp_us=frame.pts_us)
+
+    async def stop_return_video(self, stop: ReturnVideoStop) -> None:
+        """Unpublish one participant's processed-video track."""
+        async with self._return_video_lock:
+            await self._unpublish_return_video((stop.participant_id, stop.track_id))
+
+    async def _publish_return_video(
+        self, frame: ReturnVideoFrame, session_id: str,
+    ) -> _ReturnVideoEntry:
+        source = rtc.VideoSource(frame.width, frame.height, is_screencast=True)
+        track = rtc.LocalVideoTrack.create_video_track(
+            f"{RETURN_VIDEO_TRACK_PREFIX}{frame.participant_id}", source,
+        )
+        # A screenshare source keeps thin annotation detail sharp. An explicit
+        # encoding gives bandwidth estimation a target, and one full-resolution
+        # layer keeps viewers from starting on a soft simulcast layer.
+        publication = await self._room.local_participant.publish_track(
+            track,
+            rtc.TrackPublishOptions(
+                source=rtc.TrackSource.SOURCE_SCREENSHARE,
+                video_encoding=rtc.VideoEncoding(
+                    max_bitrate=self._cfg.return_video_max_bitrate,
+                    max_framerate=self._cfg.return_video_max_framerate,
+                ),
+                simulcast=False,
+            ),
+        )
+        logger.info(
+            "Return video track published: pid={!r} track={!r} sid={!r}",
+            frame.participant_id, frame.track_id, publication.sid,
+        )
+        return _ReturnVideoEntry(
+            session_id, source, publication, frame.width, frame.height, frame.fmt,
+        )
+
+    async def _unpublish_return_video(self, key: tuple[str, str]) -> None:
+        entry = self._return_video.pop(key, None)
+        if entry is None:
+            return
+        self._refresh_return_track_permissions()
+        try:
+            await self._room.local_participant.unpublish_track(entry.publication.sid)
+        except Exception:
+            logger.exception(
+                "unpublish return video failed for pid={!r} track={!r}", *key,
+            )
+        finally:
+            await entry.source.aclose()
+
     async def _publish_return_track(
         self, pid: str, sample_rate: int, channels: int,
     ) -> tuple[rtc.AudioSource, rtc.LocalTrackPublication, _ReturnAudioPipe]:
@@ -780,16 +937,26 @@ class RoomClient:
 
     def _refresh_return_track_permissions(self) -> None:
         """
-        Each participant may subscribe only to their own return track.
-        Recomputed whenever the per-pid track set changes.
+        Each participant may subscribe only to their own return audio track.
+        Return video is visible to its target participant, or to every
+        participant when ``return_video_audience`` is ``"room"``.
+        Recomputed whenever the per-pid track set or the room changes.
         """
+        allowed: dict[str, list[str]] = {}
+        for pid, entry in self._return_audio.items():
+            allowed.setdefault(pid, []).append(entry.publication.sid)
+        room_wide = self._cfg.return_video_audience == "room"
+        viewers = list(self._participant_sessions)
+        for (pid, _track_id), entry in self._return_video.items():
+            for viewer in viewers if room_wide else [pid]:
+                allowed.setdefault(viewer, []).append(entry.publication.sid)
         perms = [
             rtc.ParticipantTrackPermission(
                 participant_identity=pid,
                 allow_all=False,
-                allowed_track_sids=[entry.publication.sid],
+                allowed_track_sids=track_sids,
             )
-            for pid, entry in self._return_audio.items()
+            for pid, track_sids in allowed.items()
         ]
         self._room.local_participant.set_track_subscription_permissions(
             allow_all_participants=False,
@@ -808,7 +975,10 @@ class RoomClient:
             participant.identity,
             _now_us(),
             participant_session_id,
+            attributes=_application_attributes(dict(participant.attributes)),
         )
+        if self._return_video and self._cfg.return_video_audience == "room":
+            self._refresh_return_track_permissions()
 
     async def _handle_left(
         self,
@@ -840,6 +1010,16 @@ class RoomClient:
         )
         if return_audio is not None:
             await self._close_return_audio_entry(participant.identity, return_audio)
+        async with self._return_video_lock:
+            departed = [
+                key for key, entry in self._return_video.items()
+                if key[0] == participant.identity
+                and entry.session_id == participant_session_id
+            ]
+            for key in departed:
+                await self._unpublish_return_video(key)
+            if self._return_video and self._cfg.return_video_audience == "room":
+                self._refresh_return_track_permissions()
 
     async def _close_return_audio_entry(
         self,

@@ -76,6 +76,21 @@ NAT also affects the TLS certificate: clients dial the VM's public IP, which
 must be listed in the certificate's SAN via `web_server_extra_sans`. Refer to
 [TLS for the web client](#tls-for-the-web-client) below.
 
+## Externally managed LiveKit server
+
+By default the hub starts the LiveKit server container itself. When LiveKit
+already runs elsewhere, for example as its own Docker Compose service, turn
+that off in the sample's `device_io_hub.yaml`:
+
+```yaml
+lk_manage_server: false
+```
+
+The hub then waits for a server on `lk_port_ws` and connects to it. The
+external-IP options above configure the container the hub starts, so they do
+not apply; set the equivalent options in the external server's own
+configuration.
+
 ## RHEL, Fedora, or CentOS (`firewall-cmd`)
 
 ```bash

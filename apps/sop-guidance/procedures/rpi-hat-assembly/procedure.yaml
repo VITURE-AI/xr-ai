@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# One guidance task, judged by a detector and a per-hole state machine
+# instead of a vision-language model. Layered over the worker's
+# `guidance_defaults` like any procedure; `id` must match this folder's name.
+
+id: rpi-hat-assembly
+title: raspberry pi hat assembly
+aliases: [raspberry pi, raspberry, pi hat, hat assembly, m2 hat, m.2 hat,
+          raspberry pi assembly, task1, task 1, task one]
+description: >-
+  Fit the Raspberry Pi M.2 HAT+: four corner screws in diagonal order, then
+  the FPC ribbon cable. The camera confirms each step; voice cannot skip one.
+ui:
+  thumbnail: frames/step_05.jpg
+# Installed by the sop-guidance-rpi-hat-judge package (backends/rpi-hat-judge).
+backend: rpi_hat_judge
+
+# Every key is optional; the defaults in rpi_hat_judge/config.py are what the
+# judge ran live with. Shown here are the ones worth knowing about.
+backend_config:
+  spec: sop_rpi_hat.json
+  detector:
+    profile: rpi-hat-v7
+  tick_hz: 3.0
+  tracker:
+    hf_conf_min: 0.65
+  occlusion:
+    th_hand: 0.40
+  fpc:
+    iob_min: 0.90
+    need_sec: 2.5

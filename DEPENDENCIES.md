@@ -97,6 +97,54 @@ the `dependency-manifest` workflow repeats each step and fails on drift:
   sample resolves unbounded and may install newer versions. An exact transitive
   pin published after the cutoff fails the resolve rather than floating.
 
+## Applications
+
+The generator skips `apps/`, so application projects are listed here by hand.
+Update this section with any change to an application's `pyproject.toml`.
+Each project has its own gitignored `uv.lock`, resolved locally.
+
+### `apps/sop-guidance/`
+
+Spoken, camera-checked SOP guidance. Internal dependencies resolve through
+`[tool.uv.sources]` paths into this repository, as for the projects below.
+
+- `sop-guidance` ([`apps/sop-guidance/`](apps/sop-guidance/)): the launcher
+  entry. Python `>=3.11,<3.13`. Depends on `xr-ai-launcher` and
+  `xr-ai-logging` (local, editable).
+- `xr-ai-sop-guidance` ([`apps/sop-guidance/guidance/`](apps/sop-guidance/guidance/)):
+  the guidance library. Python `>=3.11,<3.13`.
+  - Local: `xr-ai-agent-runtime`, `xr-ai-hub-client`, `xr-ai-models`,
+    `xr-ai-tools`.
+  - External: `nemo-relay>=0.7.2,<0.8`, `loguru>=0.7`, `numpy>=1.24`,
+    `pydantic>=2.12`, `pyyaml>=6.0`, `pyzmq>=27.0`, `msgpack>=1.0`.
+  - Extra `vision`: `opencv-python-headless>=4.10`, `openvino>=2025.3`,
+    `ultralytics>=8.4.117`, `Pillow>=10.0`, for the detector overlay and the
+    judge's detector.
+  - Extra `recorder`: `imageio-ffmpeg>=0.5`, for debug-capture clips.
+- `sop-guidance-worker` ([`apps/sop-guidance/worker/`](apps/sop-guidance/worker/)):
+  the LiveKit agent and the app API. Python `>=3.11,<3.13`.
+  - Local: `xr-ai-agent-runtime`, `xr-ai-hub-client`, `xr-ai-logging`,
+    `xr-ai-models`, `xr-ai-sop-guidance[vision,recorder]`,
+    `sop-guidance-rpi-hat-judge`, `xr-ai-tools`, `xr-ai-voice`,
+    `xr-ai-voicegate`.
+  - External: `nemo-relay>=0.7.2,<0.8`, `fastapi>=0.115`, `loguru>=0.7`,
+    `pyyaml>=6.0`, `torch>=2.4`, `torchvision>=0.19`, `uvicorn>=0.30`.
+    `torch` and `torchvision` come from the `pytorch-cpu` index.
+  - Dev group: `httpx>=0.27`, `pytest>=8.0`, `pytest-asyncio>=0.24`,
+    `python-multipart>=0.0.9`.
+- `sop-guidance-rpi-hat-judge` ([`apps/sop-guidance/backends/rpi-hat-judge/`](apps/sop-guidance/backends/rpi-hat-judge/)):
+  the Raspberry Pi HAT judge backend, found through the
+  `sop_guidance.backends` entry point. Python `>=3.11,<3.13`. Depends on
+  `xr-ai-sop-guidance[vision]` (local), `loguru>=0.7`, `numpy>=1.24` and
+  `pydantic>=2.12`.
+- `dashscope-speech` ([`apps/sop-guidance/services/dashscope-speech/`](apps/sop-guidance/services/dashscope-speech/)):
+  the STT/TTS bridge to Alibaba DashScope. Python `>=3.11,<3.13`.
+  - Local: `xr-ai-logging`; `xr-ai-models` in the dev group.
+  - External: `fastapi>=0.111`, `uvicorn[standard]>=0.29`,
+    `python-multipart>=0.0.9`, `httpx>=0.27`, `numpy>=1.24`, `pyyaml>=6.0`,
+    `loguru>=0.7`.
+  - Dev group: `pytest>=8`.
+
 ## Generated Python project inventory
 
 <!-- BEGIN GENERATED PYTHON DEPENDENCY MAP -->

@@ -96,6 +96,15 @@ class MsgType(IntEnum):
     FILE_MESSAGE = 18
     """Completed inbound file or byte transfer from a connector."""
 
+    RETURN_VIDEO = 19
+    """Processed video frame published back to the room for one participant."""
+
+    RETURN_VIDEO_STOP = 20
+    """Request to unpublish one participant's processed-video track."""
+
+    PARTICIPANT_ATTRIBUTES = 21
+    """Change to a connected participant's application attributes."""
+
     # Add new types here; existing code is unaffected.
 
 
@@ -225,6 +234,71 @@ class ParticipantEvent:
 
     participant_session_id: str = ""
     """Opaque identity for this particular participant connection."""
+
+    attributes: dict[str, str] = field(default_factory=dict)
+    """Application attributes the participant carried when the event was sent.
+
+    Transport-internal keys are removed. Keys and values are client-controlled
+    except where a transport documents a server-assigned key.
+    """
+
+
+@dataclass(slots=True)
+class ParticipantAttributes:
+    """A connected participant's application attributes changed."""
+
+    participant_id: str
+    """Identity of the participant whose attributes changed."""
+
+    attributes: dict[str, str]
+    """Complete current attribute set after the change."""
+
+    pts_us: int
+    """Timestamp of the change in microseconds."""
+
+    participant_session_id: str = ""
+    """Opaque identity for the participant connection that changed."""
+
+
+@dataclass(slots=True)
+class ReturnVideoFrame:
+    """One processed CPU video frame published for a participant.
+
+    The hub publishes one track per ``(participant_id, track_id)`` pair and
+    republishes it when the frame size or pixel format changes.
+    """
+
+    pts_us: int
+    """Presentation timestamp in microseconds."""
+
+    width: int
+    """Frame width in pixels."""
+
+    height: int
+    """Frame height in pixels."""
+
+    fmt: PixelFormat
+    """Pixel layout used by :attr:`data`."""
+
+    data: bytes
+    """Raw pixel bytes encoded in :attr:`fmt`."""
+
+    participant_id: str
+    """Participant the processed video belongs to."""
+
+    track_id: str = "overlay"
+    """Logical track name, unique per participant."""
+
+
+@dataclass(slots=True)
+class ReturnVideoStop:
+    """Unpublish one participant's processed-video track."""
+
+    participant_id: str
+    """Participant whose processed video is unpublished."""
+
+    track_id: str = "overlay"
+    """Logical track name passed to :class:`ReturnVideoFrame`."""
 
 
 @dataclass(slots=True)

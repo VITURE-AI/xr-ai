@@ -1,0 +1,27 @@
+description: Ultralytics YOLO26s model trained on /home/edutjie-viture/Documents/codes/sop-experiment/dataset/glasses-nosepad-v5/dataset.yaml
+author: Ultralytics
+date: '2026-09-11T23:56:45.768668+08:00'
+version: 8.4.117
+license: AGPL-3.0 License (https://ultralytics.com/license)
+docs: https://docs.ultralytics.com
+stride: 32
+task: detect
+head: Detect
+batch: 1
+imgsz:
+- 768
+- 768
+names:
+  0: glasses_lens_area
+  1: hand
+  2: nosepad_0
+  3: nosepad_1
+args:
+  data: /home/edutjie-viture/Documents/codes/sop-experiment/dataset/glasses-nosepad-v5/dataset.yaml
+  batch: 1
+  fraction: 0.3
+  quantize: 8
+  dynamic: false
+  nms: false
+channels: 3
+end2end: true

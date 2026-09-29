@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sop-guidance-rpi-hat-judge"
+version = "0.1.0"
+description = "Deterministic detector-and-state-machine judge for the Raspberry Pi M.2 HAT+ assembly procedure."
+requires-python = ">=3.11,<3.13"
+# The detector runs through sop_guidance.vision (ultralytics + OpenVINO), so
+# the judge needs nothing the worker does not already carry.
+dependencies = [
+    "xr-ai-sop-guidance[vision]",
+    "loguru>=0.7",
+    "numpy>=1.24",
+    "pydantic>=2.12",
+]
+
+# Installing this package is what makes `backend: rpi_hat_judge` resolve in a
+# procedure.yaml. The guidance host is not changed to add it.
+[project.entry-points."sop_guidance.backends"]
+rpi_hat_judge = "rpi_hat_judge:create_backend"
+
+[tool.uv.sources]
+xr-ai-sop-guidance = { path = "../../guidance", editable = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["rpi_hat_judge"]

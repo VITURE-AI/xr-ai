@@ -903,6 +903,8 @@ async def test_room_client_leave_cancels_only_departed_session_files() -> None:
     current = asyncio.create_task(wait_forever())
     client = RoomClient.__new__(RoomClient)
     client._return_audio = {}
+    client._return_video = {}
+    client._return_video_lock = asyncio.Lock()
     client._file_tasks = {
         prior: ("alice", "session-1", object()),
         current: ("alice", "session-2", object()),

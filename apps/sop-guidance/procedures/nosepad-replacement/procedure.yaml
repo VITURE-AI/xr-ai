@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# One guidance task. Everything here is layered over the worker's
+# `guidance_defaults` block (mappings merge key by key, lists and scalars
+# replace), and `id` must match this folder's name.
+
+id: nosepad-replacement
+title: nosepad replacement
+aliases: [nose pad replacement, nosepad, nose pad, replace the nose pad]
+description: Remove and replace the magnetic nose pad on Luma Ultra XR glasses.
+backend: vlm
+
+# Words that tell the interchangeable pads apart. Two spoken requests that
+# differ only in these ("the solid one" / "the wire one") are one choice
+# revised, so the newer replaces the older.
+request_qualifiers: [solid, saddle, wing, wire, butterfly, black, clear]
+
+backend_config:
+  sop: sop.json
+  detector:
+    profile: nosepad-v5
+  # Box geometry: pad-in-hand / pad-on-glasses gates, vetoes and prompt prose.
+  geometry: ../../profiles/nosepad/geometry.py
+  spatial_context: true
+
+ui:
+  thumbnail: frames/step_04_b.jpg

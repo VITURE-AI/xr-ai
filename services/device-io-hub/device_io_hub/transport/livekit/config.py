@@ -79,6 +79,10 @@ class LiveKitConnectorConfig:
     # Some cloud NATs do not support the self-ping LiveKit uses to validate the
     # discovered IP. This setting has an effect only with external IP enabled.
     lk_skip_external_ip_validation: bool = False
+    # Start the LiveKit server container. Disable when the server is already
+    # running (for example as its own compose service); the hub then waits for
+    # it on lk_port_ws, and the external-IP settings above do not apply.
+    lk_manage_server: bool = True
 
     # ── Internal URL for the Python room client (direct WS, no proxy) ─────────
     lk_internal_url: str = "ws://127.0.0.1:7880"
@@ -151,6 +155,23 @@ class LiveKitConnectorConfig:
     return_audio_max_buffer_s: float = _DEFAULT_RETURN_AUDIO_MAX_BUFFER_S
     """Maximum seconds of queued return audio retained per participant."""
 
+    # ── Return video ──────────────────────────────────────────────────────────
+    # Processed video an agent publishes for a participant, such as an
+    # annotated camera view. Without an explicit encoding, bandwidth estimation
+    # starts conservatively and the first seconds stutter.
+    return_video_max_bitrate: int = 6_000_000
+    """Maximum encoder bitrate in bits per second for each return-video track."""
+
+    return_video_max_framerate: int = 30
+    """Maximum encoder frame rate for each return-video track."""
+
+    return_video_audience: str = "participant"
+    """Who may subscribe to a return-video track.
+
+    ``participant`` limits it to the participant it was produced for. ``room``
+    lets every participant in the room subscribe, for observer clients.
+    """
+
     # ── Video recording (NVENC, optional) ─────────────────────────────────────
     # Set video_recording.enabled: true in device_io_hub.yaml to activate.
     # Frames are encoded via NVENC (pynvvideocodec) and written as H.264
@@ -172,6 +193,17 @@ class LiveKitConnectorConfig:
         self.return_audio_max_buffer_s = _validate_return_audio_max_buffer_s(
             self.return_audio_max_buffer_s
         )
+        self.return_video_max_bitrate = _positive_int(
+            "return_video_max_bitrate", self.return_video_max_bitrate
+        )
+        self.return_video_max_framerate = _positive_int(
+            "return_video_max_framerate", self.return_video_max_framerate
+        )
+        if self.return_video_audience not in ("participant", "room"):
+            raise ValueError(
+                "return_video_audience must be 'participant' or 'room', "
+                f"got {self.return_video_audience!r}"
+            )
         self.incoming_file_max_bytes = _positive_int(
             "incoming_file_max_bytes", self.incoming_file_max_bytes
         )

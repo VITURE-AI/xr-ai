@@ -1,0 +1,99 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Process-wide settings and normal (idle) mode. Per-task guidance settings
+# live in procedures/<id>/procedure.yaml and inherit `guidance_defaults`.
+# Relative paths resolve against this file.
+
+models_config: models.dashscope.json   # models.local.json for self-hosted models
+voice_gate_yaml: voice_gate.yaml
+detectors_yaml: detectors.yaml
+procedures_dir: ../procedures
+run_dir: ../run                        # XR_RUN_DIR overrides
+
+frame_max_age_s: 5.0
+frame_timeout_s: 5.0
+
+wake:
+  phrase: hey helix
+  max_distance: 2
+  max_probe: 3
+  required_in_guidance: true
+  required_in_live: true               # each client may change it (xr.wake_mode)
+
+foreground:
+  llm_role: llm
+  vlm_role: vlm
+  max_tool_rounds: 4
+  max_tokens: 512
+  temperature: 0.2
+  turn_timeout_s: 10.0
+  send_frame: true
+  noise_classifier: true
+  quick_ack: true
+
+preview:
+  fps: 30.0
+  live_profile: live-coco
+
+# Background scene memory for normal mode: one VLM look at each watched
+# camera every interval_s (paused while that camera is guided or a turn is in
+# flight), condensed into a scene summary every condense_interval_s.
+observer:
+  enabled: true
+  interval_s: 2.0
+  condense_interval_s: 60.0
+  max_observations: 240
+  context_recent: 8
+
+voice:
+  silence_duration: 0.8
+  min_speech: 0.15
+  silero_threshold: 0.5
+  idle_timeout_secs: 0
+
+api:
+  host: 127.0.0.1
+  port: 8093
+  token_env: SOP_GUIDANCE_API_TOKEN
+
+debug:
+  level: frames                        # off | frames | full
+  max_bytes: 2000000000
+  clip_seconds: 10
+  clip_fps: 1.0
+
+guidance:
+  max_concurrent_sessions: 1
+  takeover_confirm_s: 60
+  restart_confirm_s: 120
+  step_ack_timeout_s: 2.0
+  turn_history_max: 3
+  wearer_requests_max: 5
+
+# Inherited by every procedure; a procedure.yaml overrides any key.
+guidance_defaults:
+  foreground:
+    reminder_interval_s: 60
+  models:
+    llm_role: llm
+    vlm_role: vlm
+  backend_config:
+    vlm:
+      monitor:
+        check_interval_s: 1.0
+        tick_s: 0.25
+        speech_lead_s: 1.5
+        check_timeout_s: 15.0
+        skip_static_frames: true
+      progression:
+        pass_streak: 2
+        grounded_verdict_max_age_s: 20.0
+        verdict_fresh_s: 5.0
+      corrections:
+        first_gap_s: 5.0
+        backoff_s: 10.0
+        max_gap_s: 60.0
+      evaluator:
+        require_reliable_reference: true
+        frame_reuse_max_age_ms: 500

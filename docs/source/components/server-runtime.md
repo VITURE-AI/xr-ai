@@ -60,11 +60,12 @@ participant → hub → consumer (agent) → hub → same participant
 
 This is enforced at several layers:
 
-- `send_return_audio`, `send_return_data`, and `send_return_audio_flush`
-  validate that the target participant is currently connected; messages for
-  unknown participants are dropped with a warning.
+- `send_return_audio`, `send_return_data`, `send_return_audio_flush`, and
+  `send_return_video` validate that the target participant is currently
+  connected; messages for unknown participants are dropped.
 - Return-traffic topics (`return_audio.*`, `return_audio_flush.*`,
-  `return_data.*`) are transport-infrastructure-only. Connectors consume them
+  `return_data.*`, `return_video.*`, `return_video_stop.*`) are
+  transport-infrastructure-only. Connectors consume them
   for delivery and the optional capture process observes them read-only; an
   agent's default subscription excludes them.
 - On the LiveKit side, return audio is published as one track per participant
@@ -315,6 +316,9 @@ id:
   connectivity guard.
 - `send_return_audio_flush` publishes on `return_audio_flush.{pid}.` so a
   processor can cleanly interrupt the agent's own audio playback.
+- `send_return_video` publishes one processed CPU frame on
+  `return_video.{pid}.`, and `stop_return_video` publishes on
+  `return_video_stop.{pid}.` to unpublish that participant's track.
 
 The trailing `.` after the participant id terminates the pid segment so that a
 subscription for `alice` does not byte-prefix-match a topic addressed to
@@ -335,6 +339,42 @@ participant. Set this value to at least `0.12` when using the built-in voice
 transport, which maintains a 120 ms reserve. Smaller values remain available
 for custom producers whose chunk size and pacing fit within the configured
 bound.
+
+Return video is for processed views an agent renders for a participant, such
+as an annotated camera frame. The room client publishes one
+`xr-hub-overlay-{pid}` track per `(participant, track_id)` on the first frame,
+as a screen-share source with one full-resolution layer and an explicit
+encoding (`return_video_max_bitrate`, `return_video_max_framerate`). A change
+of frame size or pixel format republishes the track, and the track is
+unpublished on request or when its participant leaves.
+`return_video_audience` decides who may subscribe: `participant` (the
+default) limits the track to the participant it was produced for, and `room`
+lets every participant in the room subscribe, for observer clients. Return
+audio stays private in both modes.
+
+## Participant roles and attributes
+
+A client can declare a role at `/token?role=`. The token server accepts
+`web-client`, `watcher`, and `wearer`, stamps the choice as the `xr.role`
+participant attribute, and grants the client permission to update its own
+attributes. The connector itself joins with the reserved `hub` role, which no
+client can claim. A client names the peer whose media it reads by setting its
+own `xr.input` attribute.
+
+Processors see attributes without LiveKit in their API. `ParticipantEvent`
+carries the attributes a participant had when it joined, roster replays carry
+the current attributes, and later changes arrive as `ParticipantAttributes`
+through `ProcessorEndpoint.on_participant_attributes`.
+`ProcessorEndpoint.participant_attributes(pid)` returns the latest set. Keys in
+LiveKit's reserved `lk.` namespace are not forwarded.
+
+Both HTTP servers also serve a room roster for operator clients:
+`GET /clients` returns each participant's `identity`, `role`, `is_hub`,
+`input`, and `livestream` (whether the participant it reads media from has an
+unmuted camera or microphone). `DELETE /clients/{identity}` disconnects that
+participant, answers 204 when it is already gone, and refuses the hub's own
+participant with 409. Any client can already displace a participant by
+requesting a token for its identity, so removal grants no new authority.
 
 ## Agent status aggregation
 
