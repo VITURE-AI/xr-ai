@@ -846,14 +846,16 @@ class SessionHandle:
         latency_ms: float,
         error: str = "",
         images: Sequence[str] = (),
-    ) -> None:
+    ) -> list[str]:
         """Record one model call and pin the images it was shown.
 
         ``request`` must be a body, never a header map. ``images`` are paths
         that already exist; the writer hardlinks them into the call directory.
+        Returns where they land, relative to the session directory, so an
+        event can point at the same frame; empty when not recording.
         """
         if not self.recording:
-            return
+            return []
         self._seq += 1
         self._calls += 1
         call_rel = f"step_{self._step_index + 1:02d}/call_{self._seq:04d}"
@@ -884,6 +886,7 @@ class SessionHandle:
                 evidence=True,
             )
         )
+        return [rel for _, rel in artifacts]
 
     def preview_due(self) -> bool:
         """Rate gate for the preview loop, checked before encoding anything.

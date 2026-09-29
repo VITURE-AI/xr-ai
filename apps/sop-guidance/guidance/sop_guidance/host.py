@@ -1040,7 +1040,9 @@ class GuidanceHost:
     # ── persistence and client state ─────────────────────────────────────────
 
     def _checkpoint(self, session: GuidanceSession) -> None:
-        if session.run is None:
+        # A checkpoint is what marks a stopped run resumable, to the session
+        # list and to crash recovery alike; a backend that cannot resume keeps none.
+        if session.run is None or not session.procedure.backend.capabilities.resume:
             return
         snapshot = session.run.snapshot()
         session.recorder.save_checkpoint(

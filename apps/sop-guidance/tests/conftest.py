@@ -99,11 +99,12 @@ async def make_harness(
     capabilities: Capabilities | None = None,
     settings: HostSettings | None = None,
     backend: ProcedureBackend | None = None,
+    level: str = "off",
 ) -> HostHarness:
     folder = write_procedure(tmp_path / "procedures")
     entry = load_procedure(folder, GuidanceDefaults())
     backend = backend if backend is not None else ScriptedBackend(capabilities)
-    store = SessionStore(tmp_path / "run", level="off")
+    store = SessionStore(tmp_path / "run", level=level)
     await store.start()
     ports = FakePorts()
     replies: list[str] = []

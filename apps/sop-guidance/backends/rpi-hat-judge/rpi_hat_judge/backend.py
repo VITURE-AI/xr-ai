@@ -23,6 +23,8 @@ begins with fresh state and the model stays loaded.
 from __future__ import annotations
 
 import asyncio
+import os
+import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -79,10 +81,12 @@ class RpiHatJudgeBackend:
     name = "rpi_hat_judge"
 
     def __init__(self, *, procedure_id: str, spec: JudgeSpec, config: RpiHatJudgeConfig,
-                 annotator: Any = None, problems: Sequence[str] = ()) -> None:
+                 annotator: Any = None, problems: Sequence[str] = (),
+                 artifacts_dir: Path | None = None) -> None:
         self.procedure_id = procedure_id
         self.spec = spec
         self.config = config
+        self.artifacts_dir = artifacts_dir
         self._annotator = annotator
         self._problems = list(problems)
         self.capabilities = Capabilities(
@@ -165,6 +169,14 @@ class RpiHatJudgeRun:
         self._closed = False
         self._finished = False
         self._lock = asyncio.Lock()
+        # Judged frames for the session recorder: a small ring of names, as the
+        # vlm backend keeps. The recorder hardlinks each one, and os.replace
+        # gives every write a new inode, so a link keeps its bytes.
+        root = backend.artifacts_dir or Path("run") / "artifacts" / backend.procedure_id
+        stem = "".join(c if c.isalnum() or c in "-_." else "_"
+                       for c in f"{ctx.session_id}_{ctx.owner}")
+        self._frames_dir = root / "checks" / stem
+        self._frame_slot = 0
         self._build()
 
     def _build(self) -> None:
@@ -197,10 +209,15 @@ class RpiHatJudgeRun:
         self._last_image: Any = None
         self._last_boxes: tuple[Detection, ...] = ()
         self._warned_size = False
+        self._detect_ms = 0.0
+        self._counts: dict[str, int] = {}
+        self._box_diag: list[dict[str, Any]] = []
+        self._last_record_t: float | None = None
 
     # ── lifecycle ────────────────────────────────────────────────────────────
 
     async def start(self) -> None:
+        self._ctx.recorder.set_step(0, self._spec.spoken_instruction(0))
         await self._ctx.emit(StepChanged(0, reason="start"))
 
     async def on_frame(self, frame: TimedFrame) -> None:
@@ -211,7 +228,9 @@ class RpiHatJudgeRun:
             logger.warning("RPI_JUDGE frame {}x{} is below the {}x{} the anchors were "
                            "calibrated on; keep the board at least a third of the frame wide",
                            frame.width, frame.height, *_FULL_HD)
+        started = time.monotonic()
         detections = await self._backend.detect(frame.image)
+        self._detect_ms = (time.monotonic() - started) * 1000.0
         async with self._lock:
             if self._closed or self._finished:
                 return
@@ -234,6 +253,7 @@ class RpiHatJudgeRun:
         if command.kind == "reset":
             async with self._lock:
                 self._build()
+            self._ctx.recorder.set_step(0, self._spec.spoken_instruction(0))
             await self._ctx.emit(StepChanged(0, reason="reset"))
             return CommandResult(True)
         return CommandResult(False, reason=f"unsupported command {command.kind!r}")
@@ -262,6 +282,8 @@ class RpiHatJudgeRun:
         t = frame.timestamp_us / 1_000_000
         dets = [{"cls": d.label, "xyxy": [d.x1, d.y1, d.x2, d.y2], "conf": d.confidence}
                 for d in detections if d.label in CLASSES]
+        self._counts = {c: sum(1 for d in detections if d.label == c)
+                        for c in (*CLASSES, _HAND_LABEL)}
         hands = [[d.x1, d.y1, d.x2, d.y2] for d in detections if d.label == _HAND_LABEL]
         smoothed = self._smoother.update(dets, hands or None, t)
         verdict = self._occlusion.check(smoothed.boxes, smoothed.hand_boxes,
@@ -279,15 +301,30 @@ class RpiHatJudgeRun:
         self._res, self._tick = res, tick
         self._last_image = frame.image
         self._last_boxes = self._overlay_boxes(smoothed, res)
-        self._record_cable_events()
+        self._box_diag = self._diagnose(smoothed.boxes, res)
+        cable_changed = self._record_cable_events()
+        summary = self._summary_key()
+        changed = summary != self._summary
+
+        # Recorded under the step being judged, before a step change moves the
+        # recorder on: the frame that completed a step belongs to that step.
+        advancing = tick.finished_now or (tick.active is not None and tick.active != self._index)
+        if self._ctx.recorder.recording and (
+            advancing or tick.alerts or cable_changed
+            or (changed and (self._last_record_t is None
+                             or t - self._last_record_t >= self._cfg.record_interval_s))
+        ):
+            self._last_record_t = t
+            completed = tick.finished_now or (advancing and tick.active is not None
+                                              and tick.active > self._index)
+            await self._record_check(frame, completed=bool(completed))
 
         await self._ctx.emit(OverlayUpdate(frame.timestamp_us, self._last_boxes,
                                            extra=self._hole_map()))
         await self._speak(tick)
         if self._finished:
             return
-        summary = self._summary_key()
-        if summary != self._summary:
+        if changed:
             self._summary = summary
             await self._ctx.emit(Verdict({
                 **self._hole_map(),
@@ -299,7 +336,6 @@ class RpiHatJudgeRun:
         recorder = self._ctx.recorder
         for kind, fields in tick.alerts:
             logger.info("RPI_JUDGE_ALERT kind={} {}", kind, event_detail(kind, fields))
-            recorder.note("JUDGE_ALERT", kind=kind, detail=event_detail(kind, fields))
         if tick.newly_completed:
             self._pending_done = tick.newly_completed[-1]
             logger.info("RPI_JUDGE_COMPLETED steps={}", [i + 1 for i in tick.newly_completed])
@@ -320,7 +356,14 @@ class RpiHatJudgeRun:
             # announcement follows at once and says it.
             next_name = None if changed or active is None else spec.steps[active].speech
             kind, fields = alert
-            await self._ctx.emit(Cue(alert_cue(kind, fields, next_name), kind="correction"))
+            spoken = alert_cue(kind, fields, next_name)
+            await self._ctx.emit(Cue(spoken, kind="correction"))
+            # One correction per spoken alert, as the vlm backend records them;
+            # alerts the same tick outranked are kept beside it, unspoken.
+            for other, other_fields in tick.alerts[:-1]:
+                recorder.note("CORRECTION", kind=other, issue=event_detail(other, other_fields))
+            recorder.note("CORRECTION", kind=kind, issue=event_detail(kind, fields),
+                          spoken=spoken, count=1)
             recorder.capture_clip("correction")
         if not changed or active is None:
             return
@@ -331,15 +374,130 @@ class RpiHatJudgeRun:
         self._pending_done = None
         reason = "advance" if active > self._index else "restep"
         logger.info("RPI_JUDGE_STEP {} -> {} ({})", self._index + 1, active + 1, reason)
+        recorder.capture_clip("step-advance")
         self._index = active
+        recorder.set_step(active, spec.spoken_instruction(active))
         await self._ctx.emit(StepChanged(active, reason=reason, lead=lead))
 
-    def _record_cable_events(self) -> None:
+    def _record_cable_events(self) -> bool:
         events = self._fpc.events[self._fpc_events_seen:]
         self._fpc_events_seen = len(self._fpc.events)
         for _t, kind, fields in events:
             logger.info("RPI_JUDGE_CABLE {}", event_detail(kind, fields))
             self._ctx.recorder.note("JUDGE_CABLE", kind=kind, iob=round(float(fields["iob"]), 3))
+        return bool(events)
+
+    # ── the session log ──────────────────────────────────────────────────────
+
+    async def _record_check(self, frame: TimedFrame, *, completed: bool) -> None:
+        """Log one judged frame: a ``judge`` call with the annotated frame, and
+        the ``CHECK`` event the sessions viewer shows per step."""
+
+        recorder = self._ctx.recorder
+        try:
+            path, raw = await asyncio.to_thread(self._write_frame, frame.image, self._last_boxes)
+        except Exception:
+            logger.exception("RPI_JUDGE could not write the judged frame")
+            path, raw = "", ""
+        res = self._res
+        trusted = bool(res.get("trusted"))
+        reason = "" if trusted else str(res.get("reason") or "")
+        hole_map = self._hole_map()
+        frames = recorder.record_call(
+            kind="judge",
+            name="judge_frame",
+            request={
+                "frame": {"width": frame.width, "height": frame.height,
+                          "timestamp_us": frame.timestamp_us},
+                "detections": self._counts,
+            },
+            response={
+                "trusted": trusted,
+                "reason": reason,
+                "screws_confirmed": self._tracker.machine.k,
+                "holes": hole_map["holes"],
+                "next_hole": hole_map["next_hole"],
+                "cable": {"armed": hole_map["fpc_armed"], "seated": hole_map["fpc_seated"],
+                          "iob": round(self._fpc.last_iob, 3)},
+                "steps_done": hole_map["steps_done"],
+                "steps_owed": hole_map["steps_owed"],
+                "hf_conf_min": self._cfg.tracker.hf_conf_min,
+                "boxes": self._box_diag,
+            },
+            latency_ms=self._detect_ms,
+            # The annotated frame, then the same pixels without boxes: the raw
+            # one can be detected again offline when thresholds are tuned.
+            images=[p for p in (path, raw) if p],
+        )
+        recorder.note("CHECK", completed=completed, has_evidence=trusted,
+                      observation=self._observation(), issue=reason,
+                      frame=frames[0] if frames else path)
+
+    def _write_frame(self, image: Any, boxes: Sequence[Detection]) -> tuple[str, str]:
+        """Write the annotated and the raw frame; returns both paths."""
+
+        self._frames_dir.mkdir(parents=True, exist_ok=True)
+        self._frame_slot = (self._frame_slot + 1) % 8
+        paths = []
+        for name, pixels in (("judged", self._backend.draw(image.copy(), boxes)), ("raw", image)):
+            final = self._frames_dir / f"{name}_{self._frame_slot}.jpg"
+            tmp = final.with_suffix(".tmp")
+            tmp.write_bytes(bgr_to_jpeg(pixels, max_width=100_000, quality=90))
+            os.replace(tmp, final)
+            paths.append(str(final))
+        return paths[0], paths[1]
+
+    def _diagnose(self, boxes: list[dict[str, Any]], res: dict[str, Any]) -> list[dict[str, Any]]:
+        """Each hole, screw and cable box with its confidence and nearest hole,
+        as the old judge's /api/boxes reported them, for threshold tuning."""
+
+        board = next((b["xyxy"] for b in boxes if b["cls"] == "board"), None)
+        anchors = res.get("hole_px") or {}
+        if not anchors and board is not None:
+            bw, bh = board[2] - board[0], board[3] - board[1]
+            cx, cy = (board[0] + board[2]) / 2, (board[1] + board[3]) / 2
+            anchors = {k: (cx + rx * bw, cy + ry * bh) for k, (rx, ry) in HOLE_ANCHORS.items()}
+        long_side = max(board[2] - board[0], board[3] - board[1]) if board is not None else 0.0
+        gate = self._cfg.tracker.hf_conf_min
+        out = []
+        for b in boxes:
+            if b["cls"] not in ("hole", "hole_filled", "screw", "fpc"):
+                continue
+            x = (b["xyxy"][0] + b["xyxy"][2]) / 2
+            y = (b["xyxy"][1] + b["xyxy"][3]) / 2
+            slot, dist = None, None
+            for k, (ax, ay) in anchors.items():
+                d = ((x - ax) ** 2 + (y - ay) ** 2) ** 0.5
+                if dist is None or d < dist:
+                    slot, dist = k, d
+            conf = float(b.get("conf", 0.0))
+            out.append({
+                "cls": b["cls"],
+                "conf": round(conf, 3),
+                "xyxy": [round(v, 1) for v in b["xyxy"]],
+                "slot": slot,
+                # Distance to that hole over the board's long side: the
+                # judge's match radii are 0.16 (hole) and 0.12 (filled).
+                "dist": round(dist / long_side, 3) if dist is not None and long_side else None,
+                "passes_hf_gate": b["cls"] != "hole_filled" or conf >= gate,
+            })
+        return sorted(out, key=lambda d: (d["cls"], -d["conf"]))
+
+    def _observation(self) -> str:
+        """The judge's reading in one line, for the check row."""
+
+        holes = self._res.get("holes") or {}
+        installed = [HOLE_NAMES[k] for k in SOP_SEQUENCE if holes.get(k) == "installed"]
+        parts = [f"{len(installed)} of {len(SOP_SEQUENCE)} screws confirmed"
+                 + (f" ({', '.join(installed)})" if installed else "")]
+        next_hole = self._res.get("next_hole")
+        if next_hole:
+            parts.append(f"next: {HOLE_NAMES[next_hole]}")
+        if self._fpc.seated:
+            parts.append("cable seated")
+        elif len(installed) == len(SOP_SEQUENCE):
+            parts.append(f"cable not seated yet (IoB {self._fpc.last_iob:.2f})")
+        return "; ".join(parts) + "."
 
     # ── what clients and the foreground see ──────────────────────────────────
 
@@ -431,7 +589,8 @@ def create_backend(services: BackendServices) -> RpiHatJudgeBackend:
         annotator = services.frame_annotator(config.detector.profile, overrides={},
                                              geometry_path=None, spatial_context=False)
     return RpiHatJudgeBackend(procedure_id=entry.id, spec=spec, config=config,
-                              annotator=annotator, problems=problems)
+                              annotator=annotator, problems=problems,
+                              artifacts_dir=services.artifacts_dir / entry.id)
 
 
 __all__ = ["RpiHatJudgeBackend", "RpiHatJudgeRun", "create_backend"]

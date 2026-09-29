@@ -84,6 +84,11 @@ class RpiHatJudgeConfig(_Section):
     """Detection rate. The v7 detector at 1280 takes ~300 ms a frame on CPU, so
     3 Hz is its real throughput; vote counts assume this rate is met."""
 
+    record_interval_s: float = Field(default=1.0, gt=0.0)
+    """With debug capture on, the least time between two recorded judge frames
+    while the reading changes. Step changes, alerts and the finish are always
+    recorded."""
+
     detector: DetectorSettings = Field(default_factory=DetectorSettings)
     tracker: TrackerSettings = Field(default_factory=TrackerSettings)
     occlusion: OcclusionSettings = Field(default_factory=OcclusionSettings)

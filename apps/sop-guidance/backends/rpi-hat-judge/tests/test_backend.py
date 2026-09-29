@@ -71,16 +71,17 @@ class Feeder:
             self.t_us += TICK_US
             await session.run.on_frame(TimedFrame(
                 participant_id="alice", timestamp_us=self.t_us, width=1920, height=1080,
-                image=np.zeros((4, 4, 3), dtype=np.uint8),
+                image=np.zeros((16, 16, 3), dtype=np.uint8),
             ))
         await settle()
 
 
-async def judge(tmp_path: Path):
+async def judge(tmp_path: Path, *, level: str = "off"):
     annotator = FakeAnnotator()
     backend = RpiHatJudgeBackend(procedure_id="lid-demo", spec=load_spec(SPEC),
-                                 config=RpiHatJudgeConfig(), annotator=annotator)
-    harness = await make_harness(tmp_path, backend=backend)
+                                 config=RpiHatJudgeConfig(), annotator=annotator,
+                                 artifacts_dir=tmp_path / "artifacts")
+    harness = await make_harness(tmp_path, backend=backend, level=level)
     await harness.host.begin("alice", "lid-demo")
     return harness, Feeder(harness, annotator)
 
@@ -204,3 +205,50 @@ def test_spec_must_follow_the_board_screw_order(tmp_path: Path) -> None:
     bad.write_text(json.dumps(raw))
     with pytest.raises(SpecError, match="names hole 2"):
         load_spec(bad)
+
+
+async def test_debug_capture_logs_each_step_with_its_frames(tmp_path: Path) -> None:
+    import json
+
+    harness, feeder = await judge(tmp_path, level="frames")
+    await feeder.feed(boxes(), 8)
+    await feeder.feed(boxes(installed=[1]), 12)
+    await feeder.feed(boxes(installed=[1, 3]), 12)
+    await feeder.feed(boxes(installed=[1, 2, 3, 4]), 14)
+    await feeder.feed(boxes(installed=(1, 2, 3, 4), cable_seated=True), 14)
+    await close(harness)
+
+    (session,) = [d for d in (tmp_path / "run").iterdir() if (d / "events.jsonl").is_file()]
+    events = [json.loads(line) for line in (session / "events.jsonl").read_text().splitlines()]
+    calls = [json.loads(line) for line in (session / "calls.jsonl").read_text().splitlines()]
+    # One STEP per step shown, so the viewer groups the log by step. Screws 2
+    # and 4 going in together is a jump from step 2 to step 5.
+    assert [e["step"] for e in events if e["event"] == "STEP"] == [1, 2, 5]
+    checks = [e for e in events if e["event"] == "CHECK"]
+    assert {e["step"] for e in checks} == {1, 2, 5}
+    # The frame that moved the step on is logged under the step it left.
+    assert [e["step"] for e in checks if e["completed"]] == [1, 2, 5]
+    # Each check points at a frame kept inside the session, and a judge call holds it.
+    assert all((session / e["frame"]).is_file() for e in checks)
+    assert all(c["kind"] == "judge" and c["artifacts"] for c in calls)
+    assert calls[-1]["response"]["cable"]["seated"] is True
+    # Annotated and raw frame, and per-box confidences for tuning.
+    assert all(len(c["artifacts"]) == 2 for c in calls)
+    filled = [b for b in calls[-1]["response"]["boxes"] if b["cls"] == "hole_filled"]
+    assert {b["slot"] for b in filled} == {1, 2, 3, 4} and all(b["passes_hf_gate"] for b in filled)
+    corrections = [e for e in events if e["event"] == "CORRECTION"]
+    assert [(e["step"], e["kind"]) for e in corrections] == [(2, "order_violation"), (5, "jump")]
+    assert corrections[0]["spoken"].startswith("Out of order.")
+
+
+async def test_a_stopped_judge_run_is_not_offered_for_resume(tmp_path: Path) -> None:
+    import json
+
+    harness, feeder = await judge(tmp_path, level="frames")
+    await feeder.feed(boxes(installed=[1]), 12)
+    await harness.host.stop("alice", reason="wearer_request")
+    await close(harness)
+
+    (session,) = [d for d in (tmp_path / "run").iterdir() if (d / "meta.json").is_file()]
+    assert not (session / "checkpoint.json").exists()
+    assert json.loads((session / "meta.json").read_text())["resumable"] is False
