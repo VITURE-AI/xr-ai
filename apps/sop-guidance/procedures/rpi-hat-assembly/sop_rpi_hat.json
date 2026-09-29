@@ -23,7 +23,8 @@
       "title_en": "Install the top-left screw",
       "instruction_en": "Lay the board flat on the desk and drive screw ① into the top-left hole.",
       "tip_en": "When you're done, move both hands out of view for two seconds — the system needs one unobstructed frame to confirm.",
-      "speech_en": "install the top-left screw"
+      "speech_en": "install the top-left screw",
+      "image": "frames/step_01.jpg"
     },
     {
       "id": 2,
@@ -39,7 +40,8 @@
       "title_en": "Install the bottom-right screw",
       "instruction_en": "Tighten diagonally: drive screw ② into the bottom-right hole.",
       "tip_en": "Diagonal order loads the board evenly. Don't go around clockwise.",
-      "speech_en": "install the bottom-right screw"
+      "speech_en": "install the bottom-right screw",
+      "image": "frames/step_02.jpg"
     },
     {
       "id": 3,
@@ -55,7 +57,8 @@
       "title_en": "Install the top-right screw",
       "instruction_en": "Drive screw ③ into the top-right hole.",
       "tip_en": "The two middle-right holes ⑤⑥ are M.2 mounting holes — they never get screws.",
-      "speech_en": "install the top-right screw"
+      "speech_en": "install the top-right screw",
+      "image": "frames/step_03.jpg"
     },
     {
       "id": 4,
@@ -71,7 +74,8 @@
       "title_en": "Install the bottom-left screw",
       "instruction_en": "Drive screw ④ into the bottom-left hole. That completes all four corners.",
       "tip_en": "Ribbon-cable checking only starts once all four screws are confirmed — don't plug it in yet.",
-      "speech_en": "install the bottom-left screw"
+      "speech_en": "install the bottom-left screw",
+      "image": "frames/step_04.jpg"
     },
     {
       "id": 5,
@@ -87,7 +91,8 @@
       "title_en": "Seat the FPC ribbon cable",
       "instruction_en": "Insert the FPC ribbon cable into the connector on the board's left edge and press the latch down.",
       "tip_en": "Seated looks like this: the cable folds back with the gold stiffener facing up. Lying flat to the left means it is not seated.",
-      "speech_en": "seat the ribbon cable"
+      "speech_en": "seat the ribbon cable",
+      "image": "frames/step_05.jpg"
     }
   ],
   "_note_speech": "speech 字段专供语音播报：括号会被念成「左括号」、FPC 会被逐字母念，所以屏幕文字和念出来的话分开写。",

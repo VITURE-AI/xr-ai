@@ -12,6 +12,8 @@ aliases: [raspberry pi, raspberry, pi hat, hat assembly, m2 hat, m.2 hat,
 description: >-
   Fit the Raspberry Pi M.2 HAT+: four corner screws in diagonal order, then
   the FPC ribbon cable. The camera confirms each step; voice cannot skip one.
+ui:
+  thumbnail: frames/step_05.jpg
 # Installed by the sop-guidance-rpi-hat-judge package (backends/rpi-hat-judge).
 backend: rpi_hat_judge
 

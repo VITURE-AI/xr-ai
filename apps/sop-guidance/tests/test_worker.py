@@ -442,6 +442,23 @@ def test_api_serves_procedures_and_requires_the_token(
     assert client.get("/api/sessions", headers=auth).json()["sessions"] == []
 
 
+def test_a_replaced_step_image_gets_a_new_url(tmp_path: Path) -> None:
+    import os
+    from types import SimpleNamespace
+
+    from sop_guidance_worker.api import _frame_url
+
+    procedure = SimpleNamespace(id="lid-demo", entry=SimpleNamespace(directory=tmp_path))
+    image = tmp_path / "frames" / "step_01.jpg"
+    image.parent.mkdir()
+    image.write_bytes(b"old")
+    first = _frame_url(procedure, str(image))
+    assert first.startswith("/api/procedures/lid-demo/files/frames/step_01.jpg?v=")
+    os.utime(image, ns=(1, 1))
+    assert _frame_url(procedure, str(image)) != first
+    assert _frame_url(procedure, str(tmp_path.parent / "elsewhere.jpg")) == ""
+
+
 async def test_backend_overlay_reaches_clients_and_the_preview() -> None:
     from sop_guidance.backends.base import OverlayUpdate
     from sop_guidance.vision import Detection

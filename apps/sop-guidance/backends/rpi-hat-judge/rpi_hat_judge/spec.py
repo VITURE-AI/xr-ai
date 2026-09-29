@@ -5,15 +5,18 @@
 
 It is not forced into the schema v1 SOP the ``vlm`` backend reads: there are
 no reference frames to grade against, and each step names the hole it fills
-instead. Screen text and speech are written separately in it, because a
-bracket or a circled digit reads fine but speaks badly.
+instead. A step's optional ``image`` is an example photo for the tutorial
+only. Screen text and speech are written separately in it, because a bracket
+or a circled digit reads fine but speaks badly.
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
+
+from loguru import logger
 
 from .board import SOP_SEQUENCE
 from .texts import tts
@@ -36,6 +39,8 @@ class JudgeStep:
 
     hole: int | None
     nominal_sec: float
+    image: str = ""
+    """What the board looks like with the step done: an absolute path, or ""."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,10 +66,25 @@ class JudgeSpec:
         return text if text[-1:] in ".!?" else f"{text}."
 
 
+def _image(raw: object, spec_path: Path) -> str:
+    """A step's example photo, relative to the SOP file. Only a tutorial shows
+    it, so a missing file is dropped rather than failing the procedure."""
+
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    image = (spec_path.parent / text).resolve()
+    if not image.is_file():
+        logger.warning("rpi judge: step image {} not found; the tutorial shows text only", image)
+        return ""
+    return str(image)
+
+
 def load_spec(path: Path) -> JudgeSpec:
     """Load and check the SOP file; the English fields are required."""
 
-    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    path = Path(path)
+    raw = json.loads(path.read_text(encoding="utf-8"))
     defaults = raw.get("defaults", {})
     steps: list[JudgeStep] = []
     for entry in raw.get("steps", []):
@@ -81,6 +101,7 @@ def load_spec(path: Path) -> JudgeSpec:
             speech=entry.get("speech_en") or entry["title_en"],
             hole=entry.get("hole"),
             nominal_sec=float(entry.get("nominal_sec", defaults.get("nominal_sec", 10.0))),
+            image=_image(entry.get("image"), path),
         ))
     # The screw order is a fact of the board (SOP_SEQUENCE); a step's `hole`
     # only makes the file self-explaining, and a disagreement is a config error.
@@ -92,7 +113,7 @@ def load_spec(path: Path) -> JudgeSpec:
             raise SpecError(f"{path}: step {step.id} names hole {step.hole}, "
                             f"but the screw order puts hole {hole} there")
     steps[:len(SOP_SEQUENCE)] = [
-        JudgeStep(s.id, s.title, s.instruction, s.tip, s.speech, hole, s.nominal_sec)
+        replace(s, hole=hole)
         for s, hole in zip(steps, SOP_SEQUENCE, strict=False)
     ]
     return JudgeSpec(name=raw.get("name_en") or raw.get("name", ""), steps=tuple(steps))

@@ -207,6 +207,23 @@ def test_spec_must_follow_the_board_screw_order(tmp_path: Path) -> None:
         load_spec(bad)
 
 
+def test_each_step_shows_its_example_photo(tmp_path: Path) -> None:
+    import json
+
+    backend = RpiHatJudgeBackend(procedure_id="x", spec=load_spec(SPEC),
+                                 config=RpiHatJudgeConfig(), annotator=FakeAnnotator())
+    images = [step.reference_images for step in backend.steps()]
+    assert [Path(i[0]).name for i in images] == [f"step_0{n}.jpg" for n in range(1, 6)]
+    assert all(Path(i[0]).is_file() for i in images)
+
+    # A missing photo leaves the step text-only rather than failing the spec.
+    raw = json.loads(SPEC.read_text())
+    raw["steps"][0]["image"] = "frames/missing.jpg"
+    moved = tmp_path / "sop.json"
+    moved.write_text(json.dumps(raw))
+    assert [bool(s.image) for s in load_spec(moved).steps] == [False] * 5
+
+
 async def test_debug_capture_logs_each_step_with_its_frames(tmp_path: Path) -> None:
     import json
 

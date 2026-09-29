@@ -28,11 +28,14 @@ from .config import ApiConfig
 def _frame_url(procedure: LoadedProcedure, path: str) -> str:
     if not path:
         return ""
+    resolved = Path(path).resolve()
     try:
-        relative = Path(path).resolve().relative_to(procedure.entry.directory)
-    except ValueError:
+        relative = resolved.relative_to(procedure.entry.directory)
+        # A replaced frame keeps its name; the version gets it past the cache.
+        version = resolved.stat().st_mtime_ns
+    except (ValueError, OSError):
         return ""
-    return f"/api/procedures/{procedure.id}/files/{relative.as_posix()}"
+    return f"/api/procedures/{procedure.id}/files/{relative.as_posix()}?v={version}"
 
 
 def _summary(procedure: LoadedProcedure) -> dict[str, Any]:

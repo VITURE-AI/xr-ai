@@ -111,7 +111,8 @@ class RpiHatJudgeBackend:
     def steps(self) -> list[StepInfo]:
         return [
             StepInfo(number=index + 1, instruction=self.spec.spoken_instruction(index),
-                     title=step.title, gradeable=True, done_when=step.tip)
+                     title=step.title, gradeable=True, done_when=step.tip,
+                     reference_images=(step.image,) if step.image else ())
             for index, step in enumerate(self.spec.steps)
         ]
 
