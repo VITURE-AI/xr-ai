@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -49,7 +50,7 @@ from sop_guidance.backends.base import (
 )
 from sop_guidance.vision import Detection, bgr_to_jpeg, weight_problems
 
-from .board import CLASSES, FIXED_SLOTS, HOLE_ANCHORS, HOLE_NAMES, SOP_SEQUENCE
+from .board import CLASSES, FIXED_SLOTS, HOLE_ANCHORS, HOLE_NAMES, SOP_SEQUENCE, anchor_pixels
 from .config import RpiHatJudgeConfig
 from .fpc import FPCSeatState
 from .holes import PerHoleTracker
@@ -245,6 +246,12 @@ class RpiHatJudgeRun:
 
     async def close(self, reason: str) -> None:
         self._closed = True
+        # Every recorded frame was hardlinked into the session as it was
+        # recorded (same run volume), so the ring is only this run's scratch.
+        # The lock waits out a frame still being written.
+        async with self._lock:
+            if self._frames_dir.exists():
+                await asyncio.to_thread(shutil.rmtree, self._frames_dir, True)
 
     # ── commands ─────────────────────────────────────────────────────────────
 
@@ -455,9 +462,7 @@ class RpiHatJudgeRun:
         board = next((b["xyxy"] for b in boxes if b["cls"] == "board"), None)
         anchors = res.get("hole_px") or {}
         if not anchors and board is not None:
-            bw, bh = board[2] - board[0], board[3] - board[1]
-            cx, cy = (board[0] + board[2]) / 2, (board[1] + board[3]) / 2
-            anchors = {k: (cx + rx * bw, cy + ry * bh) for k, (rx, ry) in HOLE_ANCHORS.items()}
+            anchors = anchor_pixels(board)
         long_side = max(board[2] - board[0], board[3] - board[1]) if board is not None else 0.0
         gate = self._cfg.tracker.hf_conf_min
         out = []

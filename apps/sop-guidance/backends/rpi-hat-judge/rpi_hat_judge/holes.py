@@ -32,7 +32,7 @@ from __future__ import annotations
 from collections import deque
 from typing import Any
 
-from .board import FIXED_SLOTS, HOLE_ANCHORS, SOP_SEQUENCE
+from .board import FIXED_SLOTS, HOLE_ANCHORS, SOP_SEQUENCE, anchor_pixels
 
 ANCHOR_TOL = 0.16
 """Match radius as a fraction of the board's long side."""
@@ -81,11 +81,10 @@ def match_slots(
 
     x1, y1, x2, y2 = board_xyxy
     bw, bh = x2 - x1, y2 - y1
-    bx, by = (x1 + x2) / 2.0, (y1 + y2) / 2.0
     tol = ANCHOR_TOL * max(bw, bh)
     tol_inst = installed_tol * max(bw, bh)
     if anchor_px is None:
-        anchor_px = {k: (bx + rx * bw, by + ry * bh) for k, (rx, ry) in HOLE_ANCHORS.items()}
+        anchor_px = anchor_pixels(board_xyxy)
 
     def dist(cx: float, cy: float, k: int) -> float:
         ax, ay = anchor_px[k]

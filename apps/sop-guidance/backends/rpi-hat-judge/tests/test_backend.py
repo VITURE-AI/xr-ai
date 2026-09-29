@@ -256,6 +256,8 @@ async def test_debug_capture_logs_each_step_with_its_frames(tmp_path: Path) -> N
     corrections = [e for e in events if e["event"] == "CORRECTION"]
     assert [(e["step"], e["kind"]) for e in corrections] == [(2, "order_violation"), (5, "jump")]
     assert corrections[0]["spoken"].startswith("Out of order.")
+    # The run's frame ring goes with it; the session keeps its own links.
+    assert list((tmp_path / "artifacts" / "checks").iterdir()) == []
 
 
 async def test_a_stopped_judge_run_is_not_offered_for_resume(tmp_path: Path) -> None:

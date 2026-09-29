@@ -30,10 +30,20 @@ SOP_SEQUENCE: tuple[int, ...] = (1, 2, 3, 4)
 FIXED_SLOTS: tuple[int, ...] = tuple(k for k in HOLE_ANCHORS if k not in SOP_SEQUENCE)
 """Holes 5 and 6. They never get a screw, which makes them a known-answer test."""
 
+def anchor_pixels(board_xyxy: list[float] | tuple[float, ...]) -> dict[int, tuple[float, float]]:
+    """Where each hole should be, in pixels, for a board box ``(x1, y1, x2, y2)``."""
+
+    x1, y1, x2, y2 = board_xyxy
+    bw, bh = x2 - x1, y2 - y1
+    cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+    return {k: (cx + rx * bw, cy + ry * bh) for k, (rx, ry) in HOLE_ANCHORS.items()}
+
+
 HOLE_NAMES: dict[int, str] = {
     1: "top-left", 2: "bottom-right", 3: "top-right", 4: "bottom-left",
     5: "mid-right (fixed)", 6: "mid-right (fixed)",
 }
 
 
-__all__ = ["CLASSES", "FIXED_SLOTS", "HOLE_ANCHORS", "HOLE_NAMES", "SOP_SEQUENCE"]
+__all__ = ["CLASSES", "FIXED_SLOTS", "HOLE_ANCHORS", "HOLE_NAMES", "SOP_SEQUENCE",
+           "anchor_pixels"]
