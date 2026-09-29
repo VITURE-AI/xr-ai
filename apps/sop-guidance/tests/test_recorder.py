@@ -145,6 +145,38 @@ async def test_record_call_hardlinks_images_and_scrubs(store: SessionStore, tmp_
     assert _json(directory / "meta.json")["calls"] == 1
 
 
+async def test_a_frame_reused_before_the_writer_runs_keeps_what_was_recorded(
+    store: SessionStore, tmp_path: Path,
+) -> None:
+    # Backends keep a small ring of frame names; a writer that is behind must
+    # still pin the frame each call saw, not the one that later took its name.
+    handle = _open(store)
+    ring = tmp_path / "judged_0.jpg"
+    for frame in (b"first", b"second"):
+        fresh = tmp_path / "fresh.jpg"
+        fresh.write_bytes(frame)
+        fresh.replace(ring)
+        handle.record_call(kind="judge", name="judge_frame", request={}, response={},
+                           latency_ms=1.0, images=[str(ring)])
+    await store.flush()
+    directory = store.session_dir(handle.session_id)
+    assert [(directory / r["artifacts"][0]).read_bytes()
+            for r in _jsonl(directory / "calls.jsonl")] == [b"first", b"second"]
+
+
+async def test_a_dropped_call_reports_no_artifacts(
+    store: SessionStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handle = _open(store)
+    src = tmp_path / "live.jpg"
+    src.write_bytes(b"x")
+    monkeypatch.setattr(recorder, "_MAX_QUEUED_EVIDENCE", 0)
+    assert handle.record_call(kind="judge", name="judge_frame", request={}, response={},
+                              latency_ms=1.0, images=[str(src)]) == []
+    await store.flush()
+    assert not (store.session_dir(handle.session_id) / "step_01").exists()
+
+
 async def test_full_level_clip_ring(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(recorder, "_ffmpeg_exe", lambda: "")
     store = SessionStore(tmp_path, level="full", clip_seconds=2, clip_fps=1)

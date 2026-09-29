@@ -23,7 +23,10 @@ Three properties hold the design together:
 * **Frames are hardlinked, not copied.** Callers pass paths to images that
   already exist; ``os.link`` pins the inode so the debug copy survives the
   source being overwritten, at no I/O cost and with no re-encode, which
-  guarantees the bytes on disk are the bytes the model saw.
+  guarantees the bytes on disk are the bytes the model saw. The link is made
+  when the call is recorded, not when the writer reaches it: callers reuse a
+  small ring of file names, and a writer that is behind would otherwise link
+  whatever frame had since replaced the one the model saw.
 * **Secrets never enter.** Callers pass request *bodies*, never headers, and
   ``_scrub`` drops anything that looks like a credential regardless.
 
@@ -177,6 +180,18 @@ def _scrub(value: Any, depth: int = 0) -> Any:
 
 def _dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False)
+
+
+def _pin(src: str, dest: Path) -> bool:
+    """Hardlink ``src`` at ``dest``; True when ``dest`` now holds it."""
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        os.link(src, dest)
+    except FileExistsError:
+        return True
+    except OSError:
+        return False
+    return True
 
 
 def _atomic_write(path: Path, text: str) -> None:
@@ -511,15 +526,17 @@ class SessionStore:
             self._unwritten.setdefault(session_id, {})[path.name] = text
         self._put(_Write("json", session_id=session_id, path=path, text=text))
 
-    def _queue_evidence(self, item: _Write) -> None:
+    def _queue_evidence(self, item: _Write) -> bool:
+        """Queue one debug record; False when it was dropped for backlog."""
         if self._queued_evidence >= _MAX_QUEUED_EVIDENCE:
             # Say so once per overflow so a truncated bundle is never mistaken
             # for a run that made fewer calls than it did.
             if not self._overflowing:
                 logger.warning("guidance session writer is behind; dropping debug records")
                 self._overflowing = True
-            return
+            return False
         self._put(item)
+        return True
 
     def _put(self, item: _Write) -> None:
         queue = self._queue
@@ -665,19 +682,15 @@ class SessionStore:
     def _write_append(item: _Write) -> None:
         assert item.path is not None
         for src, dest in item.artifacts:
-            dest.parent.mkdir(parents=True, exist_ok=True)
+            if _pin(src, dest):
+                continue
+            # Cross-device (the source may live in /tmp on another mount) or
+            # already gone. A copy still captures the evidence; only the
+            # zero-cost property is lost.
             try:
-                os.link(src, dest)
-            except FileExistsError:
-                pass
-            except OSError:
-                # Cross-device (the source may live in /tmp on another mount) or
-                # already gone. A copy still captures the evidence; only the
-                # zero-cost property is lost.
-                try:
-                    shutil.copy2(src, dest)
-                except OSError as exc:
-                    logger.debug("guidance artifact {} unavailable: {}", src, exc)
+                shutil.copy2(src, dest)
+            except OSError as exc:
+                logger.debug("guidance artifact {} unavailable: {}", src, exc)
         with open(item.path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(item.record, ensure_ascii=False, default=str) + "\n")
 
@@ -876,16 +889,24 @@ class SessionHandle:
             "response": _scrub(response),
             "artifacts": [rel for _, rel in artifacts],
         }
-        self._store._queue_evidence(
+        pinned = tuple((src, self._directory / rel) for src, rel in artifacts)
+        queued = self._store._queue_evidence(
             _Write(
                 "append",
                 self._session_id,
                 self._directory / "calls.jsonl",
                 record=record,
-                artifacts=tuple((src, self._directory / rel) for src, rel in artifacts),
+                artifacts=pinned,
                 evidence=True,
             )
         )
+        if not queued:
+            return []
+        # Linked now, while each source still holds the frame the call saw; the
+        # writer finds them in place, and copies only what could not be linked.
+        # A link is a metadata operation, cheap enough for the event loop.
+        for src, dest in pinned:
+            _pin(src, dest)
         return [rel for _, rel in artifacts]
 
     def preview_due(self) -> bool:
