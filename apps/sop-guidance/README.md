@@ -19,6 +19,12 @@ The orchestrator starts DeviceIOHub, an app-owned DashScope STT/TTS shim and
 the guidance worker. Hosted DashScope models do the language and vision work
 by default; `yaml/models.local.json` switches to the shared self-hosted stack.
 
+> **Adding a new guidance task?** Start with
+> [`docs/adding-a-procedure.md`](docs/adding-a-procedure.md). It covers a
+> VLM-graded task that is data only, adding a detector or geometry plugin,
+> writing a custom backend, running one as a sidecar, and adding a
+> procedure-specific view to xr-ai-ui.
+
 ## How it works
 
 ```mermaid
@@ -476,6 +482,8 @@ worker/.venv/bin/python -m pytest -q
 ```
 
 ## Add a procedure
+
+The step-by-step guide is [`docs/adding-a-procedure.md`](docs/adding-a-procedure.md). It covers a VLM-graded task that is data only, adding a detector or a geometry plugin, writing a custom backend package, running a backend as a sidecar, and adding a procedure-specific view to xr-ai-ui. In short:
 
 A procedure is a folder under `procedures/` with a `procedure.yaml` whose
 `id` matches the folder name. For the built-in `vlm` backend, add a schema v1

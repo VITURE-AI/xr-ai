@@ -101,6 +101,10 @@ Keep the board flat and at least a third of the frame wide. Below that, the
 detector misses the holes in about two frames of three. The hole anchors were
 calibrated on 1920x1080 with the "Raspberry Pi" silkscreen upright.
 
+## Writing another backend like this one
+
+Follow [`docs/adding-a-procedure.md`](../../docs/adding-a-procedure.md#d-write-a-custom-backend): it walks through the package, the entry point, the interface and the tests, using this backend as the example.
+
 ## Test
 
 ```bash
