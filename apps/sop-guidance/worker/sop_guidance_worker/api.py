@@ -48,12 +48,23 @@ def _summary(procedure: LoadedProcedure) -> dict[str, Any]:
         "backend": procedure.backend.name,
         "steps": procedure.total_steps,
         "capabilities": procedure.backend.capabilities.model_dump(mode="json"),
-        "ui": dict(spec.ui),
+        "ui": _ui(procedure),
     }
+
+
+def _ui(procedure: LoadedProcedure) -> dict[str, Any]:
+    ui = dict(procedure.entry.spec.ui)
+    # Written relative to the procedure folder; sent as a versioned file URL
+    # like the step images, so a replaced thumbnail is not served from cache.
+    thumbnail = str(ui.get("thumbnail") or "")
+    if thumbnail:
+        ui["thumbnail"] = _frame_url(procedure, str(procedure.entry.directory / thumbnail))
+    return ui
 
 
 def create_api(*, host: GuidanceHost, store: SessionStore, config: ApiConfig) -> FastAPI:
     token = os.environ.get(config.token_env, "").strip()
+    token_bytes = token.encode("utf-8")
 
     app = FastAPI(title="SOP guidance")
 
@@ -63,7 +74,10 @@ def create_api(*, host: GuidanceHost, store: SessionStore, config: ApiConfig) ->
     async def authorize(request: Request, call_next: Any) -> Any:
         if token:
             scheme, _, value = request.headers.get("authorization", "").partition(" ")
-            if scheme.lower() != "bearer" or not hmac.compare_digest(value.strip(), token):
+            # Bytes, not str: compare_digest raises on non-ASCII text, and a
+            # header can carry any latin-1 byte.
+            if scheme.lower() != "bearer" or not hmac.compare_digest(
+                    value.strip().encode("latin-1", "replace"), token_bytes):
                 return JSONResponse({"detail": "missing or invalid bearer token"},
                                     status_code=401)
         return await call_next(request)

@@ -427,6 +427,9 @@ def test_api_serves_procedures_and_requires_the_token(
     auth = {"authorization": "Bearer s3cret"}
 
     assert client.get("/api/procedures").status_code == 401
+    # Any header byte is a wrong token, not a server error.
+    assert client.get("/api/procedures",
+                      headers={"authorization": "Bearer caf\xe9".encode("latin-1")}).status_code == 401
     assert client.get("/debug/index.json").status_code == 401
     listing = client.get("/api/procedures", headers=auth).json()
     assert [p["id"] for p in listing["procedures"]] == ["lid-demo"]
@@ -457,6 +460,20 @@ def test_a_replaced_step_image_gets_a_new_url(tmp_path: Path) -> None:
     os.utime(image, ns=(1, 1))
     assert _frame_url(procedure, str(image)) != first
     assert _frame_url(procedure, str(tmp_path.parent / "elsewhere.jpg")) == ""
+
+
+def test_the_thumbnail_is_a_versioned_file_url(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    from sop_guidance_worker.api import _ui
+
+    (tmp_path / "frames").mkdir()
+    (tmp_path / "frames" / "step_05.jpg").write_bytes(b"jpeg")
+    spec = SimpleNamespace(ui={"thumbnail": "frames/step_05.jpg", "accent": "green"})
+    procedure = SimpleNamespace(id="lid-demo", entry=SimpleNamespace(directory=tmp_path, spec=spec))
+    ui = _ui(procedure)
+    assert ui["thumbnail"].startswith("/api/procedures/lid-demo/files/frames/step_05.jpg?v=")
+    assert ui["accent"] == "green" and spec.ui["thumbnail"] == "frames/step_05.jpg"
 
 
 async def test_backend_overlay_reaches_clients_and_the_preview() -> None:
