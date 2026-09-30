@@ -226,6 +226,42 @@ async def test_live_mode_needs_the_wake_word(harness: HostHarness) -> None:
     assert foreground.asked == [("alice", "what is on the table?"), ("bob", "what time is it")]
 
 
+async def test_live_wake_mode_follows_the_client_driving_the_glasses(harness: HostHarness) -> None:
+    # The glasses never announce a wake mode; the operator who picked their
+    # camera turns the wake word off for them.
+    interaction, foreground, clients, _, _ = _interaction(harness)
+    clients.state("alice").input = "glasses"
+    clients.set_wake_in_live("alice", False)
+
+    await interaction.on_speech("glasses", "what is on the table", 1)
+    await _drain(interaction)
+
+    assert foreground.asked == [("glasses", "what is on the table")]
+
+
+def test_live_wake_mode_resolution() -> None:
+    endpoint = FakeEndpoint()
+    clients = ClientRegistry(endpoint, wake_in_live=True)  # type: ignore[arg-type]
+    assert clients.wake_required_in_live("glasses")
+
+    clients.state("alice").input = "glasses"
+    clients.state("bob").input = "glasses"
+    clients.set_wake_in_live("alice", False)
+    assert not clients.wake_required_in_live("glasses")
+    clients.set_wake_in_live("bob", True)  # the newest driver's choice wins
+    assert clients.wake_required_in_live("glasses")
+    clients.set_wake_in_live("alice", False)
+    assert not clients.wake_required_in_live("glasses")
+
+    clients.set_wake_in_live("glasses", True)  # the speaker's own choice wins
+    assert clients.wake_required_in_live("glasses")
+
+    clients.forget("glasses")
+    clients.state("ghost").input = "bob"
+    clients.set_wake_in_live("ghost", False)  # a driver that is not connected
+    assert clients.wake_required_in_live("bob")
+
+
 async def test_noise_classifier_drops_unaddressed_chatter(harness: HostHarness) -> None:
     interaction, foreground, clients, _, _ = _interaction(harness, classifier="no")
     clients.state("alice").wake_in_live = False
