@@ -846,6 +846,73 @@ def test_pad_on_a_lens_is_not_seated():
         assert plugin.veto(seated, "pad_on_glasses") == ""
 
 
+@pytest.mark.parametrize(("requests", "size"), [
+    (["size one nose pad"], 2),
+    (["size 0 pad"], 1),
+    (["solid saddle pad"], 1),
+    (["the wire butterfly one"], 2),
+    (["size zero nose pad", "size one nose pad"], 2),   # a revision wins
+    (["size one nose pad", "the black one"], 2),       # a sizeless request is skipped
+    (["size one", "not the size zero, the size one"], 0),  # both named: no guess
+    (["the black one"], 0),
+    (["no one else"], 0),
+])
+def test_requested_size(requests, size):
+    assert _nosepad().module.requested_size(requests) == size
+
+
+def test_request_veto_catches_the_wrong_size_in_hand():
+    """Live step 3: asked for size one, held the size zero, advanced."""
+    plugin = _nosepad()
+    glasses = _box("glasses", 100, 100, 300, 200)
+    hand = _box("hand", 470, 370, 560, 460)
+    wrong = plugin.analyze([glasses, _box("nosepad_0", 500, 400, 520, 420), hand])
+    assert plugin.veto(wrong, "pad_in_hand") == ""
+    assert plugin.request_veto(wrong, "pad_in_hand", ["size one nose pad"]) == (
+        "That is the size zero solid saddle, but you asked for size one. "
+        "Put it down and pick up the wire butterfly."
+    )
+    assert plugin.request_veto(wrong, "pad_in_hand", ["size zero nose pad"]) == ""
+    assert plugin.request_veto(wrong, "pad_in_hand", ["the black one"]) == ""
+    assert plugin.request_veto(wrong, "pad_in_hand", []) == ""
+    assert plugin.request_veto(wrong, "no_pad_on_glasses", ["size one nose pad"]) == ""
+
+    # A size-less box, or both sizes in hand, is no contradiction.
+    plain = plugin.analyze([glasses, _box("nosepad", 500, 400, 520, 420), hand])
+    assert plugin.request_veto(plain, "pad_in_hand", ["size one nose pad"]) == ""
+    both = plugin.analyze([
+        glasses, _box("nosepad_0", 500, 400, 520, 420),
+        _box("nosepad_1", 530, 400, 550, 420), hand,
+    ])
+    assert plugin.request_veto(both, "pad_in_hand", ["size one nose pad"]) == ""
+
+
+def test_request_veto_reads_the_pad_at_the_bridge_on_step_4():
+    plugin = _nosepad()
+    glasses = _box("glasses", 100, 100, 300, 200)
+    seated = plugin.analyze([
+        glasses, _box("nosepad_0", 180, 130, 200, 150),
+        _box("nosepad_1", 600, 600, 620, 620),        # the asked-for one, still on the table
+    ])
+    assert plugin.request_veto(seated, "pad_on_glasses", ["size one nose pad"]) == (
+        "That is the size zero solid saddle on the bridge, but you asked for "
+        "size one. Swap it for the wire butterfly."
+    )
+    assert plugin.request_veto(seated, "pad_on_glasses", ["size zero"]) == ""
+
+
+def test_request_veto_sizes_are_voted():
+    """One frame reading the other size must not tell the wearer they are wrong."""
+    plugin = _nosepad()
+    glasses = _box("glasses", 100, 100, 300, 200)
+    hand = _box("hand", 470, 370, 560, 460)
+    right = [glasses, _box("nosepad_1", 500, 400, 520, 420), hand]
+    for _ in range(4):
+        plugin.analyze(right, "pid")
+    blip = plugin.analyze([glasses, _box("nosepad_0", 500, 400, 520, 420), hand], "pid")
+    assert plugin.request_veto(blip, "pad_in_hand", ["size one nose pad"]) == ""
+
+
 def test_pad_in_hand_gate_reads_both_halves_of_held():
     plugin = _nosepad()
     glasses = _box("glasses", 100, 100, 300, 200)

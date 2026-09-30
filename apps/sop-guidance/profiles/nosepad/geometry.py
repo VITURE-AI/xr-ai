@@ -34,9 +34,11 @@ than taken from the one frame in hand — see "temporal persistence" below.
 """
 from __future__ import annotations
 
+import re
 import threading
 import time
 from collections import deque
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
 
 # The vision package exports the box primitives; only the task meaning lives here.
@@ -173,6 +175,12 @@ _GLASSES_MIN_CONF  = 0.50
 # within this fraction of the cluster width either side of the middle.
 _BRIDGE_SEAT_HALF_FRAC = 0.25
 
+# Which size a pad box says it is, as a bit, so a frame's sizes vote as a mask.
+# The plain `nosepad` label names no size and sets nothing.
+_SIZE_BITS = {"nosepad_0": 1, "nosepad_1": 2}
+# How to name each size to the wearer: the number they use, and the shape.
+_SIZE_NAMES = {1: ("size zero", "solid saddle"), 2: ("size one", "wire butterfly")}
+
 # Per-step gates a SOP step may opt into via ``geometry_gate``. These only ever
 # VETO a positive VLM verdict; nothing here can turn a "no" into a "yes", so a
 # missed detection costs a retry rather than a false pass.
@@ -259,8 +267,9 @@ _VOTE_MIN_SAMPLES = 3
 # discount remains the only thing covering it.
 _COAST_S = 0.6
 
-# (monotonic, seated, held_at_bridge, held_away, loose, off_bridge, obscured)
-_history: dict[str, deque[tuple[float, int, int, int, int, int, int]]] = {}
+# (monotonic, seated, held_at_bridge, held_away, loose, off_bridge, obscured,
+#  held_sizes, bridge_sizes)
+_history: dict[str, deque[tuple[float, int, int, int, int, int, int, int, int]]] = {}
 # Per stream, one (monotonic, count) per category: the last count a majority of
 # that category confirmed, and when. Lives and dies with that stream's ring in
 # `_history` -- a stalled preview loop whose window has aged out must not coast
@@ -272,13 +281,16 @@ _history_lock = threading.Lock()
 # uses for them. One list so a reordering cannot desynchronise the two.
 _CATEGORIES = ("seated", "held at the bridge", "held away", "loose", "off the bridge")
 _N = len(_CATEGORIES)
-# Where the obscured flag sits in a history sample.
+# Where the size masks and the obscured flag sit in a history sample.
 _OBSCURED_AT = 1 + _N
+_HELD_SIZES_AT = _OBSCURED_AT + 1
+_BRIDGE_SIZES_AT = _HELD_SIZES_AT + 1
 
 
 def _vote(
     stream: str, counts: tuple[int, ...], obscured: bool = False,
-) -> tuple[tuple[int, ...], tuple[str, ...], bool]:
+    sizes: tuple[int, int] = (0, 0),
+) -> tuple[tuple[int, ...], tuple[str, ...], bool, tuple[int, int]]:
     """Record this frame's counts; answer the voted ones and what was coasted.
 
     *counts* are in `_CATEGORIES` order. Returns them unchanged for an unkeyed
@@ -299,14 +311,20 @@ def _vote(
     re-asserting through a dropout, while this is a claim about the CURRENT
     view, which does not. Coasting it would keep asking after the hand had
     already moved away.
+
+    *sizes* are the size masks (see `_SIZE_BITS`) of the pads in a hand and of
+    the pads seated at the bridge. Each bit is voted like *obscured* and for the
+    same reason not coasted: which pad is in the hand NOW is a claim about the
+    current view, and a single frame reading the other size must not tell the
+    wearer they picked up the wrong one.
     """
     if not stream:
-        return counts, (), obscured
+        return counts, (), obscured, sizes
     now = time.monotonic()
     cutoff = now - _VOTE_WINDOW_S
     with _history_lock:
         window = _history.setdefault(stream, deque())
-        window.append((now, *counts, int(obscured)))
+        window.append((now, *counts, int(obscured), *sizes))
         # Prune every stream, not just this one: a participant who leaves never
         # calls again, and its ring would otherwise sit here for the process
         # lifetime. The dict is one entry per live wearer, so this is free.
@@ -321,11 +339,16 @@ def _vote(
                 _confirmed.pop(key, None)
         samples = list(_history.get(stream, ()))
         if len(samples) < _VOTE_MIN_SAMPLES:
-            return counts, (), obscured
+            return counts, (), obscured, sizes
         need = len(samples) // 2 + 1
         # Majority of the window, on the same k-th-largest rule as the counts.
         obscured_voted = bool(
             sorted((sample[_OBSCURED_AT] for sample in samples), reverse=True)[need - 1],
+        )
+        voted_sizes = tuple(
+            sum(bit for bit in _SIZE_NAMES
+                if sum(1 for sample in samples if sample[at] & bit) >= need)
+            for at in (_HELD_SIZES_AT, _BRIDGE_SIZES_AT)
         )
         voted = tuple(
             sorted((sample[1 + i] for sample in samples), reverse=True)[need - 1]
@@ -353,7 +376,7 @@ def _vote(
                 # confirmation of absence, so it stores nothing to coast from.
                 standing.append((now, voted[i]) if voted[i] else (0.0, 0))
         _confirmed[stream] = tuple(standing)
-        return tuple(out), tuple(coasted), obscured_voted
+        return tuple(out), tuple(coasted), obscured_voted, (voted_sizes[0], voted_sizes[1])
 
 
 @dataclass(frozen=True)
@@ -392,6 +415,11 @@ class PadGeometry:
     raw_held_away: int = 0
     raw_loose: int = 0
     raw_off_bridge: int = 0
+    # Size masks (see `_SIZE_BITS`), voted like the counts but never coasted:
+    # the sizes the pads in a hand read as, and those of the pads seated at the
+    # bridge. 0 means no size-labelled pad there, not "unknown size".
+    held_sizes: int = 0
+    bridge_sizes: int = 0
     # Categories whose voted count above came from a recent confirmation rather
     # than from the current window -- see "coasting". Provenance for the prose
     # and for a log line; nothing gates on it, and a gate reading it would be
@@ -488,6 +516,14 @@ def _which(pad: Detection) -> str:
     the caller's wording says so.
     """
     return f" (the detector reads it as {pad.label})" if pad.label != "nosepad" else ""
+
+
+def _sizes(pads: Iterable[Detection]) -> int:
+    """The size mask of *pads*: one `_SIZE_BITS` bit per size among them."""
+    mask = 0
+    for pad in pads:
+        mask |= _SIZE_BITS.get(pad.label, 0)
+    return mask
 
 
 def _bridge_is_obscured(
@@ -651,11 +687,12 @@ def analyze(detections: list[Detection], stream: str = "") -> PadGeometry:
         # Coasting matters MOST here. This is the frame shape a dropout takes --
         # the glasses in view and no pad box at all -- so without it a fitted
         # size-0 pad reads as an empty bridge every time the detector blinks.
-        voted, coasted, obscured = _vote(stream, (0,) * _N, obscured)
+        voted, coasted, obscured, sizes = _vote(stream, (0,) * _N, obscured)
         counts = PadGeometry(
             glasses_seen=True,
             seated=voted[0], held_at_bridge=voted[1], held_away=voted[2],
-            loose=voted[3], off_bridge=voted[4], coasted=coasted, bridge_obscured=obscured,
+            loose=voted[3], off_bridge=voted[4], held_sizes=sizes[0],
+            bridge_sizes=sizes[1], coasted=coasted, bridge_obscured=obscured,
         )
         # Built from the geometry rather than from the locals, so it picks up
         # every window-derived line by construction. Still '' in the ordinary
@@ -776,12 +813,14 @@ def analyze(detections: list[Detection], stream: str = "") -> PadGeometry:
             f"{'spare pads' if plural else 'a spare pad'} resting nearby, not "
             "part of this step."
         )
-    voted, coasted, obscured = _vote(
+    held_sizes = _sizes(pad for pad, _ in held_at_bridge + held_away)
+    voted, coasted, obscured, sizes = _vote(
         stream,
         (len(seated), len(held_at_bridge), len(held_away), len(loose), len(off_bridge)),
         _bridge_is_obscured(
             cluster, hands, pads_near_bridge=len(seated) + len(held_at_bridge),
         ),
+        (held_sizes, _sizes(seated)),
     )
     counts = PadGeometry(
         glasses_seen=True,
@@ -789,7 +828,7 @@ def analyze(detections: list[Detection], stream: str = "") -> PadGeometry:
         loose=voted[3], off_bridge=voted[4], coasted=coasted, bridge_obscured=obscured,
         raw_seated=len(seated), raw_held_at_bridge=len(held_at_bridge),
         raw_held_away=len(held_away), raw_loose=len(loose),
-        raw_off_bridge=len(off_bridge),
+        raw_off_bridge=len(off_bridge), held_sizes=sizes[0], bridge_sizes=sizes[1],
     )
     if counts.seated < len(seated) or counts.held < counts.raw_held:
         # The prose describes THIS frame, because this frame is the image the VLM
@@ -901,6 +940,74 @@ def veto(geometry: PadGeometry, gate: str) -> str:
             "back off the frame, not just hold it."
         )
     return ""
+
+
+# Words that name each size in a wearer request. Requests arrive already
+# normalised by the host's extraction call ("size one nose pad"), which maps
+# garbled speech onto real part names, so plain word matches are enough.
+_SIZE_WORDS = (
+    (1, re.compile(r"\b(?:size|number)\s*(?:zero|0|o|oh)\b|\b(?:solid|saddle|wing)\b")),
+    (2, re.compile(r"\b(?:size|number)\s*(?:one|1|won)\b|\b(?:wire|butterfly)\b")),
+)
+
+
+def requested_size(requests: Sequence[str]) -> int:
+    """The size bit the wearer asked for most recently, or 0 for none.
+
+    The newest request that names a size decides, the way the grader is told a
+    revision replaces what it revises. One that names BOTH sizes ("not the size
+    zero, the size one") is ambiguous to a word match, and stops the search
+    rather than falling back to an older request it may be correcting.
+    """
+    for said in reversed(tuple(requests)):
+        text = str(said).lower()
+        named = [bit for bit, pattern in _SIZE_WORDS if pattern.search(text)]
+        if len(named) == 1:
+            return named[0]
+        if named:
+            return 0
+    return 0
+
+
+def request_veto(geometry: PadGeometry, gate: str, requests: Sequence[str]) -> str:
+    """Why the pad in play is not the size the wearer asked for, or ''.
+
+    Built for the live failure behind it: asked for size one, the wearer picked
+    up the size zero; the detector read that pad as `nosepad_0` in the hand on
+    every frame, the geometry prose said so, and the grader still passed the
+    request check while writing in its own evidence that the label disagreed.
+
+    Fires only on a clear contradiction, voted over the window: pads of the
+    other size in play and none of the asked-for size. No size-labelled pad, a
+    request that names no size, or both sizes in play all say nothing, so a
+    detector blind to size leaves the VLM's answer standing.
+    """
+    gate = (gate or "").strip().lower()
+    if geometry is None or not geometry.glasses_seen:
+        return ""
+    wanted = requested_size(requests)
+    if not wanted:
+        return ""
+    if gate == "pad_in_hand":
+        seen = geometry.held_sizes
+    elif gate == "pad_on_glasses":
+        seen = geometry.bridge_sizes
+    else:
+        return ""
+    if not seen or seen & wanted:
+        return ""
+    # One bit is set: `seen` is non-zero and shares none with `wanted`.
+    have_number, have_shape = _SIZE_NAMES[seen]
+    want_number, want_shape = _SIZE_NAMES[wanted]
+    if gate == "pad_in_hand":
+        return (
+            f"That is the {have_number} {have_shape}, but you asked for "
+            f"{want_number}. Put it down and pick up the {want_shape}."
+        )
+    return (
+        f"That is the {have_number} {have_shape} on the bridge, but you asked "
+        f"for {want_number}. Swap it for the {want_shape}."
+    )
 
 
 def overlay_guide() -> str:

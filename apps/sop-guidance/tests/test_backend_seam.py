@@ -302,3 +302,53 @@ def test_a_request_check_that_denies_the_request_does_not_count() -> None:
     for judged in ("wearer asked for size zero and holds the solid saddle",
                    "none of their requests bear on what is visible here"):
         assert request_check_present(check(judged)), judged
+
+
+async def test_request_veto_overturns_a_passing_request_check(tmp_path: Path) -> None:
+    """Live: the grader passed "matches what the wearer asked for" while its
+    own evidence said the detector saw the other size in the hand."""
+    import json
+
+    from sop_guidance.backends.vlm.grading import (
+        REQUEST_CHECK_NAME,
+        OverlayPrompting,
+        StepFacts,
+        StudentImage,
+        check_step,
+    )
+
+    frame = tmp_path / "live.jpg"
+    frame.write_bytes(b"\xff\xd8")
+    passing = json.dumps({
+        "observation": "a hand holds a black nose pad",
+        "requirements": {
+            "replacement nose pad held in hand": {"visible": True, "evidence": "gripped"},
+            REQUEST_CHECK_NAME: {"visible": True, "evidence": "labelled nosepad_0, looks right"},
+        },
+        "issue": "",
+    })
+
+    async def ask(_paths, _question):
+        return passing
+
+    seen: list[tuple[str, tuple[str, ...]]] = []
+
+    def request_veto(_geometry, gate, requests):
+        seen.append((gate, tuple(requests)))
+        return "That is the size zero solid saddle, but you asked for size one."
+
+    facts = StepFacts(instruction="pick up a pad", geometry_gate="pad_in_hand",
+                      wearer_context=("size one nose pad",))
+    student = StudentImage(path=str(frame), timestamp_us=1, geometry=object())
+    result = await check_step(facts=facts, student=student, ask=ask,
+                              overlay=OverlayPrompting(request_veto=request_veto))
+    assert not result.completed
+    assert result.issue.startswith("That is the size zero")
+    assert seen == [("pad_in_hand", ("size one nose pad",))]
+
+    # No spoken request: the hook is not consulted and the pass stands.
+    seen.clear()
+    quiet = StepFacts(instruction="pick up a pad", geometry_gate="pad_in_hand")
+    result = await check_step(facts=quiet, student=student, ask=ask,
+                              overlay=OverlayPrompting(request_veto=request_veto))
+    assert result.completed and seen == []

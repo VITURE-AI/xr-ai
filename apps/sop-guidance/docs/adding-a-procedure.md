@@ -219,6 +219,9 @@ def describe(geometry) -> str:          # prose for the VLM prompt, or ""
 
 def veto(geometry, gate: str) -> str:   # a reason to reject, or "" to allow
     ...
+
+def request_veto(geometry, gate: str, requests) -> str:
+    ...                                 # the part in play is not the one the wearer asked for
 ```
 
 Then reference it from the procedure and name a gate on a step:

@@ -111,6 +111,7 @@ class VlmBackend:
             spoken_example=geometry.spoken_example(),
             contradiction_example=geometry.contradiction_example(),
             veto=geometry.veto,
+            request_veto=geometry.request_veto,
         )
 
     async def annotate_teacher(self, path: str) -> tuple[str, bool]:

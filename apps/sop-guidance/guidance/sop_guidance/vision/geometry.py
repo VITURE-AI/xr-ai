@@ -37,6 +37,14 @@ Contract -- every hook is OPTIONAL, and a plugin declares only what it has:
     def veto(geometry: object, gate: str) -> str
         Why *gate* rejects this frame, or '' when it does not object.
 
+    def request_veto(geometry: object, gate: str, requests: Sequence[str]) -> str
+        Why this frame contradicts what the wearer ASKED FOR, or ''. *requests*
+        are the wearer's spoken requirements, oldest first; the caller only
+        asks when there is at least one and the step names a gate. Same
+        one-directional contract as ``veto``. It exists because the VLM, told
+        the wearer asked for size one, has passed a step while writing in its
+        own evidence that the detector saw size zero in the hand.
+
     def overlay_guide() -> str
         Extra clause for the box-legend prompt block.
 
@@ -83,6 +91,7 @@ import hashlib
 import importlib.util
 import inspect
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
@@ -94,7 +103,7 @@ if TYPE_CHECKING:
 
 # Hooks looked up on a loaded module. Order is the order they are reported in.
 _HOOKS = (
-    "analyze", "describe", "veto",
+    "analyze", "describe", "veto", "request_veto",
     "overlay_guide", "spoken_example", "contradiction_example",
 )
 
@@ -108,6 +117,7 @@ class GeometryPlugin(Protocol):
     def analyze(self, detections: list[Detection], stream: str = "") -> object: ...
     def describe(self, geometry: object) -> str: ...
     def veto(self, geometry: object, gate: str) -> str: ...
+    def request_veto(self, geometry: object, gate: str, requests: Sequence[str]) -> str: ...
     def overlay_guide(self) -> str: ...
     def spoken_example(self) -> str: ...
     def contradiction_example(self) -> str: ...
@@ -156,6 +166,9 @@ class NullGeometry:
         return ""
 
     def veto(self, geometry: object, gate: str) -> str:
+        return ""
+
+    def request_veto(self, geometry: object, gate: str, requests: Sequence[str]) -> str:
         return ""
 
     def overlay_guide(self) -> str:
@@ -217,6 +230,13 @@ class LoadedGeometry:
             return ""
         return str(hook(geometry, gate) or "")
 
+    def request_veto(self, geometry: object, gate: str, requests: Sequence[str]) -> str:
+        hook = getattr(self._module, "request_veto", None)
+        said = tuple(r for r in requests if r and str(r).strip())
+        if hook is None or geometry is None or not gate or not said:
+            return ""
+        return str(hook(geometry, gate, said) or "")
+
     def overlay_guide(self) -> str:
         hook = getattr(self._module, "overlay_guide", None)
         return "" if hook is None else str(hook() or "")
@@ -242,16 +262,22 @@ def _validate(module: ModuleType, path: Path, gates: tuple[str, ...]) -> None:
             "without geometry reasoning, use NullGeometry instead."
         )
     if "analyze" not in present:
-        if "veto" in present:
-            raise ValueError(
-                f"{path}: defines veto() but no analyze() — veto would never "
-                "receive anything to judge."
-            )
+        for hook in ("veto", "request_veto"):
+            if hook in present:
+                raise ValueError(
+                    f"{path}: defines {hook}() but no analyze() — {hook} would "
+                    "never receive anything to judge."
+                )
         if "describe" in present:
             raise ValueError(
                 f"{path}: defines describe() but no analyze() — describe would "
                 "never receive anything to describe."
             )
+    if "request_veto" in present and not gates:
+        raise ValueError(
+            f"{path}: defines request_veto() but declares no GATES — it only "
+            "runs on a step that names a gate, so it could never run."
+        )
     if gates and "veto" not in present:
         raise ValueError(
             f"{path}: declares GATES {list(gates)} but no veto() — a step "

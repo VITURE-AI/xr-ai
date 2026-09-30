@@ -667,6 +667,8 @@ class OverlayPrompting:
     spoken_example: str = ""
     contradiction_example: str = ""
     veto: Callable[[object, str], str] | None = None
+    request_veto: Callable[[object, str, Sequence[str]], str] | None = None
+    """Geometry's answer to "is that the part they asked for?"; see ``check_step``."""
 
 
 async def _diagnose_mistake(
@@ -737,6 +739,14 @@ async def check_step(
         overlay.veto(student.geometry, facts.geometry_gate)
         if overlay.veto is not None and facts.geometry_gate else ""
     )
+    # The request check below is the VLM grading itself, and it has passed a
+    # step whose own evidence said the detector saw the other size in the hand.
+    # Where the detector can tell the sizes apart, that is box arithmetic.
+    if (not geometry_issue and overlay.request_veto is not None
+            and facts.geometry_gate and facts.wearer_context):
+        geometry_issue = overlay.request_veto(
+            student.geometry, facts.geometry_gate, facts.wearer_context,
+        )
 
     key_block = key_info_block(
         objects=facts.key_objects,
