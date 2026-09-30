@@ -215,10 +215,17 @@ def is_stop_speaking(text: str) -> bool:
 # ── takeover confirmation ────────────────────────────────────────────────────
 
 _AFFIRMATIVE = re.compile(
-    r"(?:yes(?: please)?|yeah|yep|sure|ok|okay|go ahead"
-    r"|yes[, ]+(?:go ahead|stop (?:it|that session)|start (?:mine|my session)))"
+    r"(?:(?:yes|yeah|yep|sure|ok|okay)[, ]+)?"
+    r"(?:yes(?: please)?|yeah|yep|sure|ok|okay|go ahead|ready|i'm ready|i am ready"
+    r"|let's go|let's do it|let's start|let's begin|sounds good|please do)"
+    # Naming the action counts only after a yes: a bare "stop it" is not one.
+    r"|(?:yes|yeah|yep|sure|ok|okay)[, ]+(?:stop (?:it|that session)"
+    r"|start (?:it|mine|my session))"
 )
-_NEGATIVE = re.compile(r"(?:no|no thanks|no thank you|cancel|never mind|nevermind)")
+_NEGATIVE = re.compile(
+    r"(?:no|nope|no thanks|no thank you|cancel|never mind|nevermind|not now|not yet"
+    r"|maybe later|later)"
+)
 
 
 def confirmation_answer(text: str) -> bool | None:

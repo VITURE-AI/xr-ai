@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import HostHarness, settle
+from conftest import HostHarness, eventually, make_harness, settle
 from fastapi.testclient import TestClient
 from sop_guidance.backends.base import RunCommand
 from sop_guidance_worker.api import create_api
@@ -237,14 +237,73 @@ async def test_noise_classifier_drops_unaddressed_chatter(harness: HostHarness) 
 
 
 async def test_spoken_entry_starts_without_a_model(harness: HostHarness) -> None:
-    interaction, foreground, _, _, _ = _interaction(harness)
+    interaction, foreground, _, _, said = _interaction(harness)
 
     await interaction.on_speech("alice", "Hey Helix, guide me through the lid", 1)
+    await _drain(interaction)
+    # Offered first: guided mode takes the conversation and the camera.
+    assert harness.host.session_of("alice") is None
+    assert said[-1][1].endswith("Ready to start?")
+
+    await interaction.on_speech("alice", "Hey Helix, yes", 2)
     await _drain(interaction)
 
     assert foreground.asked == []
     assert harness.host.session_of("alice") is not None
-    assert harness.ports.texts("alice") == ["Step 1 of 3: Open the lid."]
+    assert harness.ports.texts("alice")[-1] == "Step 1 of 3: Open the lid."
+
+
+async def test_a_declined_start_offer_starts_nothing(harness: HostHarness) -> None:
+    interaction, foreground, _, _, said = _interaction(harness)
+
+    await interaction.on_speech("alice", "Hey Helix, guide me through the lid", 1)
+    await _drain(interaction)
+    await interaction.on_speech("alice", "Hey Helix, not now", 2)
+    await _drain(interaction)
+
+    assert harness.host.session_of("alice") is None
+    assert harness.host.start_offer("alice") is None
+    assert said[-1][1].startswith("Okay, we'll leave it")
+    # A yes after the decline has nothing to accept, so it goes to the model.
+    await interaction.on_speech("alice", "Hey Helix, yes", 3)
+    await _drain(interaction)
+    assert harness.host.session_of("alice") is None and foreground.asked
+
+
+async def test_start_offer_is_not_made_for_client_controls_or_within_a_run(
+        harness: HostHarness) -> None:
+    host = harness.host
+    assert (await host.begin("alice", "lid-demo")).status == "started"
+    # A step jump inside the run the wearer is already in is not a new start.
+    moved = await host.begin("alice", "lid-demo", at_step=2, entry_mode="step",
+                             intent_quote="step 2", request="go to step 2", confirm=True)
+    assert moved.status == "started"
+
+
+async def test_an_unanswered_start_offer_starts(tmp_path) -> None:
+    from sop_guidance.host import HostSettings
+
+    h = await make_harness(tmp_path, settings=HostSettings(step_ack_timeout_s=0,
+                                                           start_confirm_s=0.05))
+    try:
+        offer = await h.host.begin("alice", "lid-demo", confirm=True)
+        assert offer.status == "confirmation_required"
+        assert h.host.session_of("alice") is None
+        await eventually(lambda: h.host.session_of("alice") is not None)
+        assert h.host.start_offer("alice") is None
+        # A yes landing just after has nothing to accept and says nothing.
+        assert (await h.host.confirm_start("alice")).message == ""
+
+        # A no stops the clock.
+        await h.host.stop("alice", reason="wearer_request")
+        await h.host.begin("alice", "lid-demo", at_step=2, entry_mode="step",
+                           intent_quote="step 2", request="go to step 2", confirm=True)
+        h.host.cancel_start("alice")
+        await asyncio.sleep(0.2)
+        assert h.host.session_of("alice") is None
+    finally:
+        await h.host.shutdown()
+        await h.store.aclose()
 
 
 async def test_guidance_fast_paths(harness: HostHarness) -> None:
@@ -274,7 +333,7 @@ async def test_guidance_fast_paths(harness: HostHarness) -> None:
 
 async def test_bare_resume_after_a_stop(harness: HostHarness) -> None:
     # The stop message says "Say resume to pick up there": no procedure name.
-    interaction, foreground, _, _, _ = _interaction(harness)
+    interaction, foreground, _, _, spoken = _interaction(harness)
     host = harness.host
     await host.begin("alice", "lid-demo")
     await host.command("alice", RunCommand("next"))
@@ -282,6 +341,9 @@ async def test_bare_resume_after_a_stop(harness: HostHarness) -> None:
 
     for said in ("Hey Helix, resume guidance", "Hey Helix, resume"):
         await interaction.on_speech("alice", said, 1)
+        await _drain(interaction)
+        assert spoken[-1][1].endswith("at step 2 of 3. Ready to carry on?")
+        await interaction.on_speech("alice", "Hey Helix, yes", 1)
         await _drain(interaction)
         assert foreground.asked == []
         assert harness.host.session_of("alice") is not None
@@ -509,6 +571,8 @@ async def test_pronoun_entry_starts_the_only_procedure(harness: HostHarness) -> 
     interaction, foreground, _, _, _ = _interaction(harness)
 
     await interaction.on_speech("alice", "Hey Helix, guide me through that procedure.", 1)
+    await _drain(interaction)
+    await interaction.on_speech("alice", "Hey Helix, yes", 2)
     await _drain(interaction)
 
     assert foreground.asked == []

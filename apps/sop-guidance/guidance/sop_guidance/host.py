@@ -67,6 +67,10 @@ class HostSettings(BaseModel):
     restart_confirm_s: float = Field(default=120.0, ge=0.0)
     """After a run ends, ask before starting the same procedure again; 0 disables."""
 
+    start_confirm_s: float = Field(default=30.0, ge=0.0)
+    """How long a spoken offer to enter guided mode waits for an answer before
+    starting anyway; only a no stops it. 0 starts at once."""
+
     step_ack_timeout_s: float = Field(default=2.0, ge=0.0)
     """Budget for the few words that lead into the next step; 0 disables."""
 
@@ -187,6 +191,14 @@ class _Finished:
 
 
 @dataclass(slots=True)
+class _StartOffer:
+    procedure_id: str
+    step_index: int
+    resume_id: str
+    timer: asyncio.Task[Any] | None = None
+
+
+@dataclass(slots=True)
 class _Takeover:
     token: str
     active_session_id: str
@@ -264,6 +276,7 @@ class GuidanceHost:
         self._takeovers: dict[str, _Takeover] = {}
         self._finished: dict[str, _Finished] = {}
         self._restart_pending: dict[str, str] = {}
+        self._start_offers: dict[str, _StartOffer] = {}
         self._generation = 0
         self._background: set[asyncio.Task[Any]] = set()
 
@@ -332,6 +345,7 @@ class GuidanceHost:
         intent_quote: str = "",
         request: str | None = None,
         explicit: bool = False,
+        confirm: bool = False,
     ) -> HostReply:
         """Start, resume or jump into a procedure on *pid*'s behalf.
 
@@ -341,12 +355,17 @@ class GuidanceHost:
         quoted intent must actually appear in what was said. *explicit* marks
         a client control or a deterministic spoken entry, which is consent in
         itself and skips the restart confirmation.
+
+        *confirm* marks a spoken entry: guided mode is then offered and entered
+        only on a yes (see ``confirm_start``). A client control never asks,
+        because pressing Start is the yes.
         """
 
         async with self._lock:
             return await self._begin(
                 pid, procedure_id, at_step=at_step, entry_mode=entry_mode,
                 intent_quote=intent_quote, request=request, explicit=explicit,
+                confirm=confirm,
             )
 
     async def _begin(
@@ -359,6 +378,7 @@ class GuidanceHost:
         intent_quote: str,
         request: str | None,
         explicit: bool = False,
+        confirm: bool = False,
     ) -> HostReply:
         logger.info("START_GUIDANCE procedure={!r} at_step={} pid={}", procedure_id, at_step, pid)
         procedure = self._procedures.get(procedure_id)
@@ -430,8 +450,148 @@ class GuidanceHost:
                                        "beginning?")
             return HostReply("ok", f"We just finished '{procedure.title}'. Do you want to go "
                                    "through it again from the beginning?")
-        self._restart_pending.pop(pid, None)
+        # The restart question above already asked; a second one would be a nag.
+        restart_answered = self._restart_pending.pop(pid, None) == procedure.id
+        if confirm and not restart_answered:
+            offer = self._offer_start(pid, procedure, step_index, resume_id)
+            if offer is not None:
+                return offer
         return await self._enter(procedure, pid, step_index=step_index, resume_id=resume_id)
+
+    # ── confirming a spoken start ────────────────────────────────────────────
+
+    def _offer_start(
+        self, pid: str, procedure: LoadedProcedure, step_index: int, resume_id: str,
+    ) -> HostReply | None:
+        """Ask before entering guided mode, or None to enter now.
+
+        Guided mode takes over the conversation and the camera, and the model
+        starts it on requests that were only questions about the task, so a
+        spoken start is an offer the wearer accepts. None when there is nothing
+        to ask: confirmation is off, the wearer is moving within the run they
+        are already in, another participant's session is in the way (the
+        takeover offer asks instead), or this same entry was already offered
+        and asked for again -- which is the yes.
+        """
+
+        window_s = self._settings.start_confirm_s
+        if window_s <= 0:
+            return None
+        current = self._sessions.get(pid)
+        if current is not None and current.procedure.id == procedure.id:
+            return None
+        if self._conflict_for(pid, procedure) is not None:
+            return None
+        offer = self._start_offers.get(pid)
+        if (offer is not None
+                and (offer.procedure_id, offer.step_index, offer.resume_id)
+                == (procedure.id, step_index, resume_id)):
+            self._drop_start_offer(pid)
+            return None
+        self._drop_start_offer(pid)
+        offer = _StartOffer(procedure_id=procedure.id, step_index=step_index,
+                            resume_id=resume_id)
+        offer.timer = asyncio.create_task(self._start_when_unanswered(pid, offer, window_s),
+                                          name=f"guidance-start-offer-{pid}")
+        self._background.add(offer.timer)
+        offer.timer.add_done_callback(self._background.discard)
+        self._start_offers[pid] = offer
+        logger.info("GUIDANCE_START_OFFER procedure={} step={} pid={}",
+                    procedure.id, step_index + 1, pid)
+        return HostReply("confirmation_required", self._start_question(
+            procedure, step_index, resume=bool(resume_id), replacing=current,
+        ))
+
+    @staticmethod
+    def _start_question(procedure: LoadedProcedure, step_index: int, *, resume: bool,
+                        replacing: GuidanceSession | None) -> str:
+        title, total = procedure.title, procedure.total_steps
+        lead = (f"That will stop '{replacing.procedure.title}'. "
+                if replacing is not None else "")
+        if resume:
+            return (f"{lead}I'll pick up guided mode for '{title}' at step "
+                    f"{step_index + 1} of {total}. Ready to carry on?")
+        if step_index:
+            return (f"{lead}I'll start guided mode for '{title}' at step "
+                    f"{step_index + 1} of {total}. Ready?")
+        return (f"{lead}I'll walk you through '{title}' in guided mode: {total} steps. "
+                "Ready to start?")
+
+    def start_offer(self, pid: str) -> LoadedProcedure | None:
+        """The procedure *pid* was offered guided mode for, while the offer stands."""
+
+        offer = self._start_offers.get(pid)
+        return self._procedures.get(offer.procedure_id) if offer is not None else None
+
+    async def confirm_start(self, pid: str) -> HostReply:
+        """Enter the guided mode *pid* was offered."""
+
+        async with self._lock:
+            offer = self._drop_start_offer(pid)
+            if offer is None and pid in self._sessions:
+                # The unanswered offer started it a moment before this yes.
+                return HostReply("ok", "")
+            if offer is None:
+                return HostReply("error", "There is nothing waiting to start. Ask me "
+                                          "whenever you're ready.")
+            return await self._accept_start(pid, offer)
+
+    def cancel_start(self, pid: str) -> HostReply:
+        self._drop_start_offer(pid)
+        return HostReply("ok", "Okay, we'll leave it for now. Just ask when you're ready.")
+
+    async def _accept_start(self, pid: str, offer: _StartOffer) -> HostReply:
+        procedure = self._procedures.get(offer.procedure_id)
+        if procedure is None:
+            return HostReply("error", "This procedure is not ready.")
+        if offer.resume_id:
+            try:
+                self._validate_resume(offer.resume_id)
+            except ValueError as exc:
+                return HostReply("error", str(exc))
+        return await self._enter(procedure, pid, step_index=offer.step_index,
+                                 resume_id=offer.resume_id)
+
+    def _drop_start_offer(self, pid: str) -> _StartOffer | None:
+        """Withdraw *pid*'s offer and stop its timer; the offer, or None."""
+
+        offer = self._start_offers.pop(pid, None)
+        if (offer is not None and offer.timer is not None
+                and offer.timer is not asyncio.current_task()):
+            offer.timer.cancel()
+        return offer
+
+    async def _start_when_unanswered(self, pid: str, offer: _StartOffer,
+                                     window_s: float) -> None:
+        """Start the offered run once *window_s* passes with no answer.
+
+        Silence is taken as a yes: the wearer asked for this, and the question
+        is there to let them back out, not to make them say yes twice. It never
+        starts while the question is still playing, and it gives an answer they
+        have just finished saying a moment to arrive.
+        """
+
+        await asyncio.sleep(window_s)
+        for _ in range(40):
+            playing = self._ports.speech_remaining_s(pid) > 0
+            answering = (_now_us() - self._ports.last_heard_us(pid)) < 2_000_000
+            if not (playing or answering):
+                break
+            await asyncio.sleep(0.5)
+        async with self._lock:
+            if self._start_offers.get(pid) is not offer:
+                return
+            self._drop_start_offer(pid)
+            procedure = self._procedures.get(offer.procedure_id)
+            # Whoever got in first in the meantime keeps their session: an
+            # unanswered offer is not a takeover.
+            if procedure is None or self._conflict_for(pid, procedure) is not None:
+                return
+            logger.info("GUIDANCE_START_OFFER_UNANSWERED procedure={} pid={} -- starting",
+                        offer.procedure_id, pid)
+            reply = await self._accept_start(pid, offer)
+        if reply.status == "error" and reply.message:
+            await self._ports.say(pid, reply.message, kind="status")
 
     def _needs_restart_confirmation(self, pid: str, procedure_id: str) -> bool:
         window_s = self._settings.restart_confirm_s
@@ -468,6 +628,7 @@ class GuidanceHost:
         conflict = self._conflict_for(pid, procedure)
         if conflict is not None:
             return self._offer_takeover(pid, conflict, procedure.id, step_index, resume_id)
+        self._drop_start_offer(pid)
         current = self._sessions.get(pid)
         if current is not None:
             await self._exit(current, outcome="superseded", reason="new_run", speak=False)
@@ -694,6 +855,7 @@ class GuidanceHost:
     async def participant_left(self, pid: str) -> None:
         async with self._lock:
             self._takeovers.pop(pid, None)
+            self._drop_start_offer(pid)
             session = self._sessions.get(pid)
             if session is not None:
                 await self._exit(session, outcome="interrupted", reason="owner_disconnected",

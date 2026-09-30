@@ -67,6 +67,7 @@ guidance:
   max_concurrent_sessions: 1
   takeover_confirm_s: 60
   restart_confirm_s: 120
+  start_confirm_s: 30                  # a spoken start asks first, starts on a yes or after this; 0 skips
   step_ack_timeout_s: 2.0
   turn_history_max: 3
   wearer_requests_max: 5
