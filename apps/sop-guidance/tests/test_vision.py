@@ -822,6 +822,30 @@ def test_nosepad_gates_read_opposite_counts():
     )
 
 
+def test_pad_on_a_lens_is_not_seated():
+    """Live step 4: the pad lay on the right lens and the step completed."""
+    plugin = _nosepad()
+    glasses = _box("glasses", 333, 280, 1040, 510)
+    # The recorded box: over the right lens, 88% of the way across.
+    on_lens = plugin.analyze([glasses, _box("nosepad_1", 885, 330, 1030, 447)])
+    assert (on_lens.seated, on_lens.off_bridge) == (0, 1)
+    assert on_lens.pads_on_glasses == 0
+    assert plugin.veto(on_lens, "pad_on_glasses") == (
+        "The pad is sitting on the lens, not in the bridge. Move it to "
+        "the slot between the lenses and push it in until it holds."
+    )
+    assert "NOT seated in the bridge slot" in plugin.describe(on_lens)
+    # Clearing the bridge still counts it, the conservative direction there.
+    assert plugin.veto(on_lens, "no_pad_on_glasses") != ""
+
+    # Both ends of the measured seated range stay seated.
+    for centre in (0.31, 0.61):
+        x = 333 + centre * 707
+        seated = plugin.analyze([glasses, _box("nosepad_1", x - 70, 330, x + 70, 447)])
+        assert (seated.seated, seated.off_bridge) == (1, 0), centre
+        assert plugin.veto(seated, "pad_on_glasses") == ""
+
+
 def test_pad_in_hand_gate_reads_both_halves_of_held():
     plugin = _nosepad()
     glasses = _box("glasses", 100, 100, 300, 200)

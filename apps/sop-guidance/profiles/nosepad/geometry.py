@@ -153,6 +153,26 @@ _BRIDGE_OBSCURED_COVERAGE = 0.50
 # dropped first — step_02's run down to 0.26, a real detection scores 0.93-0.96.
 _GLASSES_MIN_CONF  = 0.50
 
+# ── on the glasses is not in the bridge ──────────────────────────────────────
+#
+# A pad resting on a lens overlaps the glasses box exactly as a seated one does,
+# so "in the glasses" alone passed step 4 live with the pad lying on the right
+# lens by the hinge -- and the VLM, shown that frame, called it seated four
+# times running. The boxes do answer this one: where across the glasses the pad
+# sits.
+#
+# Measured with the v5 checkpoint on every step-4 frame recorded so far (old
+# fork and this app, 100 frames, 55 pad boxes on the glasses), as the pad
+# centre's position across the glasses cluster, 0 = left edge, 1 = right:
+#
+#   seated at the bridge, 52 boxes   0.31 - 0.61   (median 0.49)
+#   on the right lens, 3 boxes       0.84 - 0.87
+#
+# The low end is a seated pad whose glasses box stretched over a temple arm, so
+# the band is wide on purpose: a pad counts as AT the bridge while its centre is
+# within this fraction of the cluster width either side of the middle.
+_BRIDGE_SEAT_HALF_FRAC = 0.25
+
 # Per-step gates a SOP step may opt into via ``geometry_gate``. These only ever
 # VETO a positive VLM verdict; nothing here can turn a "no" into a "yes", so a
 # missed detection costs a retry rather than a false pass.
@@ -239,8 +259,8 @@ _VOTE_MIN_SAMPLES = 3
 # discount remains the only thing covering it.
 _COAST_S = 0.6
 
-# (monotonic, seated, held_at_bridge, held_away, loose, obscured)
-_history: dict[str, deque[tuple[float, int, int, int, int, int]]] = {}
+# (monotonic, seated, held_at_bridge, held_away, loose, off_bridge, obscured)
+_history: dict[str, deque[tuple[float, int, int, int, int, int, int]]] = {}
 # Per stream, one (monotonic, count) per category: the last count a majority of
 # that category confirmed, and when. Lives and dies with that stream's ring in
 # `_history` -- a stalled preview loop whose window has aged out must not coast
@@ -248,22 +268,24 @@ _history: dict[str, deque[tuple[float, int, int, int, int, int]]] = {}
 _confirmed: dict[str, tuple[tuple[float, int], ...]] = {}
 _history_lock = threading.Lock()
 
-# Field order of the four counts everywhere in this module, and the words the
-# prose uses for them. One list so a reordering cannot desynchronise the two.
-_CATEGORIES = ("seated", "held at the bridge", "held away", "loose")
+# Field order of the counts everywhere in this module, and the words the prose
+# uses for them. One list so a reordering cannot desynchronise the two.
+_CATEGORIES = ("seated", "held at the bridge", "held away", "loose", "off the bridge")
+_N = len(_CATEGORIES)
+# Where the obscured flag sits in a history sample.
+_OBSCURED_AT = 1 + _N
 
 
 def _vote(
-    stream: str, seated: int, held_at_bridge: int, held_away: int, loose: int,
-    obscured: bool = False,
-) -> tuple[tuple[int, int, int, int], tuple[str, ...], bool]:
+    stream: str, counts: tuple[int, ...], obscured: bool = False,
+) -> tuple[tuple[int, ...], tuple[str, ...], bool]:
     """Record this frame's counts; answer the voted ones and what was coasted.
 
-    Returns the counts unchanged for an unkeyed call, or while the window holds
-    fewer than ``_VOTE_MIN_SAMPLES``. Falling back to raw rather than to zero is
-    the safe direction and not a detail: `pad_on_glasses` vetoes when its count
-    is 0, so a cold window that voted everything to zero would veto every fit
-    step until it filled.
+    *counts* are in `_CATEGORIES` order. Returns them unchanged for an unkeyed
+    call, or while the window holds fewer than ``_VOTE_MIN_SAMPLES``. Falling
+    back to raw rather than to zero is the safe direction and not a detail:
+    `pad_on_glasses` vetoes when its count is 0, so a cold window that voted
+    everything to zero would veto every fit step until it filled.
 
     The second element names the categories whose answer came from a recent
     confirmation rather than from this window (see "coasting"). It is empty in
@@ -279,14 +301,12 @@ def _vote(
     already moved away.
     """
     if not stream:
-        return (seated, held_at_bridge, held_away, loose), (), obscured
+        return counts, (), obscured
     now = time.monotonic()
     cutoff = now - _VOTE_WINDOW_S
     with _history_lock:
         window = _history.setdefault(stream, deque())
-        window.append(
-            (now, seated, held_at_bridge, held_away, loose, int(obscured)),
-        )
+        window.append((now, *counts, int(obscured)))
         # Prune every stream, not just this one: a participant who leaves never
         # calls again, and its ring would otherwise sit here for the process
         # lifetime. The dict is one entry per live wearer, so this is free.
@@ -301,43 +321,39 @@ def _vote(
                 _confirmed.pop(key, None)
         samples = list(_history.get(stream, ()))
         if len(samples) < _VOTE_MIN_SAMPLES:
-            return (seated, held_at_bridge, held_away, loose), (), obscured
+            return counts, (), obscured
         need = len(samples) // 2 + 1
         # Majority of the window, on the same k-th-largest rule as the counts.
         obscured_voted = bool(
-            sorted((sample[5] for sample in samples), reverse=True)[need - 1],
+            sorted((sample[_OBSCURED_AT] for sample in samples), reverse=True)[need - 1],
         )
         voted = tuple(
-            sorted((sample[i] for sample in samples), reverse=True)[need - 1]
-            for i in (1, 2, 3, 4)
+            sorted((sample[1 + i] for sample in samples), reverse=True)[need - 1]
+            for i in range(_N)
         )
         # Timed PER CATEGORY, because they expire independently: a seated pad
         # confirmed a moment ago and a spare last seen a second ago are not one
         # fact with one deadline.
-        previous = _confirmed.get(stream, ((0.0, 0),) * 4)
-        counts: list[int] = []
+        previous = _confirmed.get(stream, ((0.0, 0),) * _N)
+        out: list[int] = []
         coasted: list[str] = []
         standing: list[tuple[float, int]] = []
-        for i in range(4):
+        for i in range(_N):
             confirmed_at, confirmed_count = previous[i]
             if confirmed_count > voted[i] and now - confirmed_at <= _COAST_S:
-                counts.append(confirmed_count)
+                out.append(confirmed_count)
                 coasted.append(_CATEGORIES[i])
                 # Carried forward WITHOUT refreshing the clock. Coasting off a
                 # coast would renew itself every frame and never expire, which
                 # is a pad welded to the bridge for the rest of the session.
                 standing.append((confirmed_at, confirmed_count))
             else:
-                counts.append(voted[i])
+                out.append(voted[i])
                 # A majority of zero is the absence of a confirmation, not a
                 # confirmation of absence, so it stores nothing to coast from.
                 standing.append((now, voted[i]) if voted[i] else (0.0, 0))
-        _confirmed[stream] = (standing[0], standing[1], standing[2], standing[3])
-        return (
-            (counts[0], counts[1], counts[2], counts[3]),
-            tuple(coasted),
-            obscured_voted,
-        )
+        _confirmed[stream] = tuple(standing)
+        return tuple(out), tuple(coasted), obscured_voted
 
 
 @dataclass(frozen=True)
@@ -364,6 +380,10 @@ class PadGeometry:
     held_at_bridge: int = 0
     held_away: int = 0
     loose: int = 0
+    # On the glasses with no hand on it, but well away from the bridge -- a pad
+    # resting on a lens. See `_BRIDGE_SEAT_HALF_FRAC`. Not `seated`, so it never
+    # completes a fit step; `no_pad_on_glasses` still counts it.
+    off_bridge: int = 0
     # What this one frame showed, before voting. Nothing may gate on these — they
     # exist so the prose can describe the image the VLM is actually looking at,
     # and so a disagreement between the two is visible in a log or a test repr.
@@ -371,6 +391,7 @@ class PadGeometry:
     raw_held_at_bridge: int = 0
     raw_held_away: int = 0
     raw_loose: int = 0
+    raw_off_bridge: int = 0
     # Categories whose voted count above came from a recent confirmation rather
     # than from the current window -- see "coasting". Provenance for the prose
     # and for a log line; nothing gates on it, and a gate reading it would be
@@ -630,11 +651,11 @@ def analyze(detections: list[Detection], stream: str = "") -> PadGeometry:
         # Coasting matters MOST here. This is the frame shape a dropout takes --
         # the glasses in view and no pad box at all -- so without it a fitted
         # size-0 pad reads as an empty bridge every time the detector blinks.
-        voted, coasted, obscured = _vote(stream, 0, 0, 0, 0, obscured)
+        voted, coasted, obscured = _vote(stream, (0,) * _N, obscured)
         counts = PadGeometry(
             glasses_seen=True,
             seated=voted[0], held_at_bridge=voted[1], held_away=voted[2],
-            loose=voted[3], coasted=coasted, bridge_obscured=obscured,
+            loose=voted[3], off_bridge=voted[4], coasted=coasted, bridge_obscured=obscured,
         )
         # Built from the geometry rather than from the locals, so it picks up
         # every window-derived line by construction. Still '' in the ordinary
@@ -650,14 +671,14 @@ def analyze(detections: list[Detection], stream: str = "") -> PadGeometry:
     cluster = [anchor] + [
         g for g in glasses if g is not anchor and g.intersects(anchor)
     ]
-    reference_width = (
-        max(g.x2 for g in cluster) - min(g.x1 for g in cluster)
-    ) or 1.0
+    left = min(g.x1 for g in cluster)
+    reference_width = (max(g.x2 for g in cluster) - left) or 1.0
 
     seated: list[Detection] = []
     held_at_bridge: list[tuple[Detection, float]] = []
     held_away: list[tuple[Detection, float]] = []
     loose: list[tuple[Detection, float]] = []
+    off_bridge: list[tuple[Detection, float]] = []
     for pad in pads:
         in_hand = union_coverage(pad, hands)
         in_glasses = union_coverage(pad, cluster)
@@ -673,7 +694,11 @@ def analyze(detections: list[Detection], stream: str = "") -> PadGeometry:
             else:
                 held_at_bridge.append((pad, distance_pct))
         elif in_glasses >= _SEATED_IN_GLASSES:
-            seated.append(pad)
+            across = ((pad.x1 + pad.x2) / 2.0 - left) / reference_width
+            if abs(across - 0.5) <= _BRIDGE_SEAT_HALF_FRAC:
+                seated.append(pad)
+            else:
+                off_bridge.append((pad, across))
         else:
             loose.append((pad, distance_pct))
 
@@ -732,6 +757,15 @@ def analyze(detections: list[Detection], stream: str = "") -> PadGeometry:
                 f"- {subject} — consistent with "
                 f"{'pads' if plural else 'a pad'} already fitted to the glasses."
             )
+    for pad, across in off_bridge:
+        side = "left" if across < 0.5 else "right"
+        lines.append(
+            f"- 1 nose pad box{_which(pad)} overlaps the glasses but sits over the "
+            f"{side} lens, about {across * 100:.0f}% of the way across them -- well "
+            "away from the bridge in the middle. A pad there is lying on the lens "
+            "or the frame, NOT seated in the bridge slot, however much of the "
+            "glasses it covers."
+        )
     if loose:
         nearest = min(distance for _pad, distance in loose)
         plural = len(loose) > 1
@@ -743,7 +777,8 @@ def analyze(detections: list[Detection], stream: str = "") -> PadGeometry:
             "part of this step."
         )
     voted, coasted, obscured = _vote(
-        stream, len(seated), len(held_at_bridge), len(held_away), len(loose),
+        stream,
+        (len(seated), len(held_at_bridge), len(held_away), len(loose), len(off_bridge)),
         _bridge_is_obscured(
             cluster, hands, pads_near_bridge=len(seated) + len(held_at_bridge),
         ),
@@ -751,9 +786,10 @@ def analyze(detections: list[Detection], stream: str = "") -> PadGeometry:
     counts = PadGeometry(
         glasses_seen=True,
         seated=voted[0], held_at_bridge=voted[1], held_away=voted[2],
-        loose=voted[3], coasted=coasted, bridge_obscured=obscured,
+        loose=voted[3], off_bridge=voted[4], coasted=coasted, bridge_obscured=obscured,
         raw_seated=len(seated), raw_held_at_bridge=len(held_at_bridge),
         raw_held_away=len(held_away), raw_loose=len(loose),
+        raw_off_bridge=len(off_bridge),
     )
     if counts.seated < len(seated) or counts.held < counts.raw_held:
         # The prose describes THIS frame, because this frame is the image the VLM
@@ -770,23 +806,7 @@ def analyze(detections: list[Detection], stream: str = "") -> PadGeometry:
     lines.extend(_state_lines(counts))
     if not lines:
         return counts
-    prose = _wrap_prose(lines)
-    return PadGeometry(
-        glasses_seen=True,
-        seated=counts.seated,
-        held_at_bridge=counts.held_at_bridge,
-        held_away=counts.held_away,
-        loose=counts.loose,
-        raw_seated=counts.raw_seated,
-        raw_held_at_bridge=counts.raw_held_at_bridge,
-        raw_held_away=counts.raw_held_away,
-        raw_loose=counts.raw_loose,
-        # Both carried through explicitly, or this exit silently answers the
-        # defaults on every frame that HAS pad boxes.
-        coasted=counts.coasted,
-        bridge_obscured=counts.bridge_obscured,
-        prose=prose,
-    )
+    return replace(counts, prose=_wrap_prose(lines))
 
 
 def describe(geometry: PadGeometry) -> str:
@@ -837,6 +857,13 @@ def veto(geometry: PadGeometry, gate: str) -> str:
                 "The pad still looks like it is in your hand rather than in the "
                 "bridge. Press it into the slot and let go of it."
             )
+        if geometry.off_bridge or geometry.raw_off_bridge:
+            # Raw as well as voted: this only picks the wording of a veto that
+            # the voted `seated` count has already decided on.
+            return (
+                "The pad is sitting on the lens, not in the bridge. Move it to "
+                "the slot between the lenses and push it in until it holds."
+            )
         return (
             "I do not see a nose pad resting in the bridge yet. Push it into the "
             "slot until it stays there on its own."
@@ -857,7 +884,9 @@ def veto(geometry: PadGeometry, gate: str) -> str:
             "You have not picked up a replacement nose pad yet. Lift one off "
             "the table and hold it."
         )
-    if gate == "no_pad_on_glasses" and geometry.seated > 0:
+    # Off-bridge pads count here: the gate must be sure the bridge is clear,
+    # and a pad box anywhere on the glasses is the conservative reading.
+    if gate == "no_pad_on_glasses" and geometry.seated + geometry.off_bridge > 0:
         if geometry.held:
             # Holding a pad does not clear the bridge. Called out separately
             # because the wearer is plainly doing something with a pad and
