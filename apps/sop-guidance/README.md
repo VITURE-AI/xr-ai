@@ -7,7 +7,8 @@
 
 Spoken, camera-checked guidance through standard operating procedures, for
 XR glasses and the xr-ai-ui web client. The wearer says "Hey Helix, guide me
-through changing the nose pads"; the worker announces each step, watches the
+through changing the nose pads", says yes when asked to confirm guided mode,
+and the worker announces each step, watches the
 input camera, speaks a correction when a step is done wrong, and advances when
 the step is visibly complete. Questions asked on the way are answered with a
 short reminder of the current step. Two procedures ship:
@@ -281,10 +282,11 @@ flowchart TD
     Q2(["2 · 'Hey Helix, guide me through the nose pad replacement'"])
     subgraph S2["Start guidance"]
         direction TB
-        B1["GuidanceHost.begin → _enter<br/>recorder session, preview with nosepad-v5,<br/>backend.open_run"]
+        B0["GuidanceHost.begin → offer<br/>'I'll walk you through … Ready to start?'<br/>'yes' → confirm_start"]
+        B1["GuidanceHost._enter<br/>recorder session, preview with nosepad-v5,<br/>backend.open_run"]
         B2["VlmRun.start → emit StepChanged(0)"]
         B3["GuidanceHost._announce<br/>'Step 1 of 4: …' → SpeechRouter.say → TTS"]
-        B1 --> B2 --> B3
+        B0 --> B1 --> B2 --> B3
     end
 
     subgraph S3["The step loop · backends/vlm/run.py"]

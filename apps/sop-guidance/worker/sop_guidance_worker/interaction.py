@@ -234,6 +234,14 @@ class Interaction:
                          else host.cancel_takeover(pid))
                 await self._speech.say(pid, reply.message)
                 return
+        if host.start_offer(pid) is not None:
+            answer = confirmation_answer(request)
+            if answer is not None:
+                reply = await host.confirm_start(pid) if answer else host.cancel_start(pid)
+                # A started run announces its own first step.
+                if reply.message:
+                    await self._speech.say(pid, reply.message)
+                return
 
         session = host.session_of(pid)
         entry = guidance_request(request)
@@ -255,7 +263,8 @@ class Interaction:
             else:
                 procedure = None
             if procedure is not None:
-                reply = await host.begin(pid, procedure.id, request=request, explicit=True)
+                reply = await host.begin(pid, procedure.id, request=request, explicit=True,
+                                         confirm=True)
                 await self._speech.say(pid, reply.message)
                 return
 

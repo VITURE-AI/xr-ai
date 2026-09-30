@@ -71,6 +71,13 @@ ui:
   enabled procedure, with its title, aliases and description, as an exact
   `procedure_id` enum on `guidance__start`, so it cannot invent an id.
 
+Either way a spoken start is an offer first ("I'll walk you through X in
+guided mode: N steps. Ready to start?"). A yes starts it, a no drops it, and
+no answer starts it anyway after `start_confirm_s` (30 s; 0 skips the
+question). A client's Start
+button does not ask, and neither does moving to another step of the run
+already in progress.
+
 **How settings layer.** Later layers win: mappings merge key by key, lists
 and scalars replace.
 
@@ -219,6 +226,9 @@ def describe(geometry) -> str:          # prose for the VLM prompt, or ""
 
 def veto(geometry, gate: str) -> str:   # a reason to reject, or "" to allow
     ...
+
+def request_veto(geometry, gate: str, requests) -> str:
+    ...                                 # the part in play is not the one the wearer asked for
 ```
 
 Then reference it from the procedure and name a gate on a step:
@@ -441,4 +451,5 @@ To show something only your backend knows, such as the RPi hole map:
   `GUIDANCE_YOLO_PREHEAT ready` line per detector.
 - `curl 127.0.0.1:8093/api/procedures` lists it with the capabilities you
   expect.
-- Say "Hey Helix, guide me through <alias>" and hear "Step 1 of N: …".
+- Say "Hey Helix, guide me through <alias>", answer "yes" to the offer, and
+  hear "Step 1 of N: …".

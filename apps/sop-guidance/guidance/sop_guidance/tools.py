@@ -149,6 +149,7 @@ def build_guidance_tools(host: GuidanceHost, *, active: bool) -> ToolSet:
             entry_mode=request.entry_mode,
             intent_quote=request.intent_quote,
             request=scope.request,
+            confirm=True,
         )
         return _spoken(reply)
 
@@ -214,7 +215,7 @@ def build_guidance_tools(host: GuidanceHost, *, active: bool) -> ToolSet:
 
     async def switch_procedure(request: Any) -> SpokenResult:
         scope = _scope()
-        reply = await host.begin(scope.participant_id, request.procedure_id)
+        reply = await host.begin(scope.participant_id, request.procedure_id, confirm=True)
         return _spoken(reply)
 
     tools += [

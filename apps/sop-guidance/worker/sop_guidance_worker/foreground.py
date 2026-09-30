@@ -223,6 +223,15 @@ class Foreground:
             parts.append("\n".join(lines))
         else:
             parts.append("[Available procedures]\nNone.")
+        offered = self._host.start_offer(pid)
+        if offered is not None:
+            parts.append(
+                f"[Offered guided mode: {offered.title!r}] You have just asked whether "
+                "to start it and are waiting for their answer. If they agree, in any "
+                "words, call guidance__start for it again with the same arguments. If "
+                "they decline, or talk about something else, answer normally and do "
+                "not start it."
+            )
         finished = self._host.last_finished(pid)
         if finished is not None and not self._host.is_guiding(pid):
             procedure, step_index, at_us, completed = finished
@@ -502,7 +511,7 @@ class Foreground:
             else:
                 begun = await self._host.begin(pid, procedure.id, at_step=at_step,
                                                entry_mode=mode, intent_quote=quote,
-                                               request=transcript)
+                                               request=transcript, confirm=True)
                 if begun.message:
                     await self._respond(pid, begun.message, transcript)
         elif action == "switch":
@@ -512,7 +521,7 @@ class Foreground:
                 await self._respond(pid, f"I do not have that procedure. I have {names}.",
                                     transcript)
             else:
-                begun = await self._host.begin(pid, other.id, explicit=True)
+                begun = await self._host.begin(pid, other.id, explicit=True, confirm=True)
                 if begun.message:
                     await self._respond(pid, begun.message, transcript)
         else:

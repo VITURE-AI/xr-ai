@@ -56,6 +56,11 @@ async def test_start_tool_acts_for_the_turn_participant(harness: HostHarness) ->
     tool = tools.get("guidance__start")
     token = current_turn.set(TurnScope("alice", "guide me through the lid"))
     try:
+        offer = await tool.handler(tool.request_model(procedure_id="lid-demo"))
+        assert offer.status == "confirmation_required"
+        assert "guided mode" in offer.say and offer.say.endswith("Ready to start?")
+        assert harness.host.session_of("alice") is None
+        # Asked for again after the offer: that is the yes.
         result = await tool.handler(tool.request_model(procedure_id="lid-demo"))
     finally:
         current_turn.reset(token)
