@@ -52,6 +52,8 @@ class ClientState:
     input: str | None = None
     yolo_mode: str | None = None
     wake_in_live: bool | None = None
+    wake_seq: int = 0
+    """Order of the last ``xr.wake_mode``, so the newest of several drivers wins."""
 
 
 class ClientRegistry:
@@ -61,6 +63,7 @@ class ClientRegistry:
         self._ep = endpoint
         self._clients: dict[str, ClientState] = {}
         self._wake_default = wake_in_live
+        self._wake_seq = 0
 
     def connected(self) -> frozenset[str]:
         return self._ep.connected_participants
@@ -90,11 +93,30 @@ class ClientRegistry:
     def input_of(self, pid: str) -> str:
         return self.explicit_input(pid) or pid
 
+    def set_wake_in_live(self, pid: str, required: bool) -> None:
+        self._wake_seq += 1
+        state = self.state(pid)
+        state.wake_in_live = required
+        state.wake_seq = self._wake_seq
+
     def wake_required_in_live(self, pid: str) -> bool:
+        """Whether *pid*'s speech outside guidance needs the wake word.
+
+        A wearer's glasses never announce a wake mode; the operator who picked
+        their camera does. So *pid*'s own choice wins, then the newest choice
+        of a connected client driving *pid*, then the configured default.
+        """
+
         state = self._clients.get(pid)
-        if state is None or state.wake_in_live is None:
-            return self._wake_default
-        return state.wake_in_live
+        if state is not None and state.wake_in_live is not None:
+            return state.wake_in_live
+        connected = self.connected()
+        drivers = [s for other, s in self._clients.items()
+                   if other != pid and other in connected
+                   and s.input == pid and s.wake_in_live is not None]
+        if drivers:
+            return bool(max(drivers, key=lambda s: s.wake_seq).wake_in_live)
+        return self._wake_default
 
     def watchers(self, source: str) -> set[str]:
         """Connected clients showing *source*'s camera that asked for an overlay.
@@ -287,7 +309,7 @@ class ClientProtocol:
         if not isinstance(required, bool):
             logger.warning("wake-mode from {} ignored, invalid: {!r}", sender, payload[:120])
             return
-        self._clients.state(sender).wake_in_live = required
+        self._clients.set_wake_in_live(sender, required)
 
     # ── session controls ─────────────────────────────────────────────────────
 
